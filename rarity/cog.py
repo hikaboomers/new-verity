@@ -53,7 +53,19 @@ RARITY_MAX = 100.0  # most common value on this bot
 CARD_URL_BASE = ""  # where your bot serves /media/ (e.g. "https://admin.example.com"). Empty = no card link
 TIPS_AUTOPLAY = True  # False = tips start paused and the Tips button "plays" them
 DIVIDER = "✦━━━━━━━━━❖━━━━━━━━━✦"
+# colour stops from the rarest page to the most common page (r, g, b)
+GRADIENT = [(255, 193, 7), (255, 112, 67), (236, 64, 122), (126, 87, 194), (66, 133, 244), (149, 165, 166)]
+SPECTRUM = ["🟨", "🟧", "🟧", "🟥", "🟥", "🟪", "🟪", "🟦", "🟦", "⬜"]  # same fade, as a strip
 SORT_LABELS = ["Sort: Default", "Sort: Most common", "Sort: A–Z"]
+
+# type one of these in Search and the reply shows under the results
+EASTER = {
+    "verity": "ask me anything",
+    "nintendo": "nintendo is epic",
+    "codex": "brother you know the rarity",
+    "codexy": "brother you know the rarity",
+    "spongebob": "IM SPONGEBOB",
+}
 
 SECRET_PHRASE = "asdfghjklcodex4life"  # type this in Search to get the rarest object (once per user). "" = off
 PHRASE_CLAIMS_FILE = Path(__file__).parent / "secret_phrase_claims.json"
@@ -157,6 +169,19 @@ def search_entries(entries: list[Entry], query: str) -> tuple[list[Entry], list[
     return matches, suggestions
 
 
+def fancy(text: str) -> str:
+    """Bold fraktur letters for titles (Discord can't change fonts, but Unicode can)."""
+    out = []
+    for ch in text:
+        if "A" <= ch <= "Z":
+            out.append(chr(0x1D56C + ord(ch) - ord("A")))
+        elif "a" <= ch <= "z":
+            out.append(chr(0x1D586 + ord(ch) - ord("a")))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -174,6 +199,18 @@ def rarity_fraction(r: float) -> float:
 def rarity_bar(r: float) -> str:
     filled = max(1, round(rarity_fraction(r) * 10))
     return "▰" * filled + "▱" * (10 - filled)
+
+
+def gradient_color(t: float) -> discord.Color:
+    """Smooth multi-stop fade. t = 0.0 (rank 1, rarest) ... 1.0 (last rank)."""
+    t = min(max(t, 0.0), 1.0)
+    seg = t * (len(GRADIENT) - 1)
+    i = int(seg)
+    if i >= len(GRADIENT) - 1:
+        return discord.Color.from_rgb(*GRADIENT[-1])
+    f = seg - i
+    a, b = GRADIENT[i], GRADIENT[i + 1]
+    return discord.Color.from_rgb(*(round(x + (y - x) * f) for x, y in zip(a, b)))
 
 
 def page_bar(page: int, total: int, width: int = 8) -> str:
@@ -372,6 +409,7 @@ class RarityView(discord.ui.View):
         self.suggestions = suggestions
 
     def apply_search(self, query: str):
+        self.easter = EASTER.get(query.strip().lower())
         if not query:
             self.set_results(None, "", self.all, [])
             return
@@ -388,7 +426,19 @@ class RarityView(discord.ui.View):
     def _list_color(self):
         """Gold on the first pages (rarest), fading to grey as you page towards the common ones."""
         shown = self.page_entries()
-        return rarity_color(shown[0].rarity) if shown else EMBED_COLOR
+        return gradient_color(self._rank_t(shown[0])) if shown else EMBED_COLOR
+
+    def _rank_t(self, e: Entry) -> float:
+        """Where this object sits in the whole dex: 0.0 = rank 1 ... 1.0 = last."""
+        return (self.rank[e.id] - 1) / max(len(self.all) - 1, 1)
+
+    def _spectrum(self) -> str:
+        """The colour strip with a marker showing which part of the dex this page is in."""
+        shown = self.page_entries()
+        if not shown:
+            return ""
+        idx = round(self._rank_t(shown[0]) * (len(SPECTRUM) - 1))
+        return "".join("🔘" if i == idx else sq for i, sq in enumerate(SPECTRUM))
 
     def _author(self, embed: discord.Embed):
         user = self.bot.user
@@ -539,10 +589,12 @@ class RarityView(discord.ui.View):
             )
         else:
             embed = discord.Embed(
-                title=f"✦ {TITLE} ✦",
-                description=f"-# Lower number = rarer • {len(self.all)} objects{showing}\n{DIVIDER}\n\n{body}",
+                title=f"✦ {fancy(TITLE)} ✦",
+                description=f"-# Lower number = rarer • {len(self.all)} objects{showing}\n{self._spectrum()}\n{DIVIDER}\n\n{body}",
                 color=self._list_color(),
             )
+        if getattr(self, "easter", None):
+            embed.description = f"{embed.description}\n\n**{self.easter}**"
         embed.set_footer(text=self.footer(page_text))
         self._author(embed)
         shown = self.page_entries()
@@ -559,6 +611,8 @@ class RarityView(discord.ui.View):
             text += f"\n\n**Did you mean this?**\n{did_you_mean}"
         else:
             text += "\n\nTry a shorter or different spelling."
+        if getattr(self, "easter", None):
+            text += f"\n\n**{self.easter}**"
         embed = discord.Embed(title="🔎 No results, sorry man.", description=text, color=ERROR_COLOR)
         embed.set_footer(text=self.footer())
         return embed
@@ -567,7 +621,7 @@ class RarityView(discord.ui.View):
         embed = discord.Embed(
             title=f"❖ {e.emoji_str} {e.name} ❖".replace("  ", " "),
             description=self._detail_description(e),
-            color=rarity_color(e.rarity),
+            color=gradient_color(self._rank_t(e)),
         )
         embed.add_field(
             name="Rarity", value=f"`{e.rarity:g}`\n`{rarity_bar(e.rarity)}`", inline=True
@@ -651,7 +705,7 @@ class RarityView(discord.ui.View):
         self._add_button("Back", self._prev, discord.ButtonStyle.primary, "⬅️", row=2, disabled=no_prev)
         self._add_button("Next", self._next, discord.ButtonStyle.primary, "➡️", row=2, disabled=no_next)
         self._add_button("≫", self._last, discord.ButtonStyle.secondary, row=2, disabled=no_next)
-        self._add_button("Quit", self._quit, discord.ButtonStyle.danger, "💔", row=2)
+        self._add_button("Quit", self._quit, discord.ButtonStyle.danger, "🚪", row=2)
 
         # Row 3: tips toggle
         self._add_tips_button(3)
