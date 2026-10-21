@@ -6,6 +6,8 @@ import json
 import logging
 import math
 import random
+import time
+import weakref
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +37,8 @@ TITLE = "The Codex Archives"
 PER_PAGE = 7
 TIMEOUT = 600  # seconds of inactivity before the menu locks (keep under 15 min)
 TIP_INTERVAL = 10  # seconds between tip changes
+CLICK_COOLDOWN = 0.6  # clicks faster than this are ignored (stops button spam)
+CACHE_SECONDS = 30  # how long the object list is reused between commands
 
 SECRET_BALL_ID: int | None = None  # None = random ball (weighted by rarity); or a fixed ball id
 CLAIMS_FILE = Path(__file__).parent / "secret_claims.json"  # who already used the secret button
@@ -57,6 +61,8 @@ TIPS = [
     "Hand over your kneecaps before it's too late...",
     "Labubus dubai matcha chocolate Ohio,something is cooking in 3 days",
     "RASPBERRY PLASTIC TICKLE BEAR",
+    "This tip is here for decoration",
+    "If theres a bug, report it in the official server!",
 ]
 
 # ----------------------------------------
@@ -77,7 +83,19 @@ class Entry:
         return str(self.emoji) if self.emoji else ""
 
 
+_cache: tuple[float, list[Entry]] | None = None
+
+
 def load_entries(bot: "BallsDexBot") -> list[Entry]:
+    """Cached wrapper so spamming /rarity or autocomplete doesn't rebuild the list every time."""
+    global _cache
+    now = time.monotonic()
+    if _cache is None or now - _cache[0] > CACHE_SECONDS:
+        _cache = (now, _build_entries(bot))
+    return _cache[1]
+
+
+def _build_entries(bot: "BallsDexBot") -> list[Entry]:
     """All enabled objects sorted by rarity (lowest = rarest), then name."""
     entries: list[Entry] = []
     for ball in balls.values():
@@ -235,6 +253,7 @@ class RarityView(discord.ui.View):
 
         self.tip_index = random.randrange(len(TIPS))
         self.message: discord.Message | None = None
+        self._last_action = 0.0
         self._ticker: asyncio.Task | None = None
         self.refresh()
 
@@ -281,18 +300,31 @@ class RarityView(discord.ui.View):
             self._ticker.cancel()
 
     async def _tick(self):
+        failures = 0
         try:
             while not self.is_finished():
                 await asyncio.sleep(TIP_INTERVAL)
                 if self.is_finished() or not self.message:
                     break
+                # don't fight with a user who is clicking right now
+                if time.monotonic() - self._last_action < 3:
+                    continue
                 self.tip_index = (self.tip_index + 1) % len(TIPS)
                 try:
-                    await self.message.edit(embed=self.embed(), view=self)
-                except discord.HTTPException:
-                    break
+                    # embed only: re-sending all the components every tick is needless load
+                    await self.message.edit(embed=self.embed())
+                    failures = 0
+                except discord.NotFound:
+                    break  # message was deleted
+                except Exception:
+                    failures += 1
+                    if failures >= 3:
+                        log.warning("Rarity tip ticker stopped after repeated errors", exc_info=True)
+                        break
         except asyncio.CancelledError:
             pass
+        except Exception:
+            log.exception("Rarity tip ticker crashed")
 
     def footer(self, prefix: str = "") -> str:
         return f"{prefix} {self.tip}"
@@ -523,7 +555,29 @@ class RarityView(discord.ui.View):
         if interaction.user.id != self.author.id:
             await interaction.response.send_message("Who are YOU??", ephemeral=True)
             return False
+        now = time.monotonic()
+        if now - self._last_action < CLICK_COOLDOWN:
+            # too fast: acknowledge silently and ignore
+            try:
+                await interaction.response.defer()
+            except discord.HTTPException:
+                pass
+            return False
+        self._last_action = now
         return True
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
+        log.exception("Error in rarity menu", exc_info=error)
+
+    async def close(self):
+        """Shut this menu down (used when the same user opens a new one)."""
+        self.stop()
+        self.stop_ticker()
+        if self.message:
+            try:
+                await self.message.edit(view=None)
+            except discord.HTTPException:
+                pass
 
     async def on_timeout(self):
         self.stop_ticker()
@@ -532,7 +586,7 @@ class RarityView(discord.ui.View):
         if self.message:
             try:
                 await self.message.edit(view=self)
-            except discord.HTTPException:
+            except Exception:
                 pass
 
 
@@ -545,10 +599,20 @@ class Rarity(commands.Cog):
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
         self.claims = ClaimStore()
+        self.active: weakref.WeakValueDictionary[int, RarityView] = weakref.WeakValueDictionary()
+
+    async def cog_unload(self):
+        for view in list(self.active.values()):
+            view.stop()
+            view.stop_ticker()
 
     @app_commands.command(name="rarity", description="Show the rarity list of every object")
     @app_commands.describe(name="Jump straight to an object (suggestions appear as you type)")
     async def rarity(self, interaction: discord.Interaction, name: str | None = None):
+        old = self.active.get(interaction.user.id)
+        if old is not None:
+            await old.close()
+
         entries = load_entries(self.bot)
         view = RarityView(self.bot, interaction.user, entries, self.claims)
 
@@ -563,6 +627,7 @@ class Rarity(commands.Cog):
         await interaction.response.send_message(embed=view.embed(), view=view)
         view.message = await interaction.original_response()
         view.start_ticker()
+        self.active[interaction.user.id] = view
 
     @rarity.autocomplete("name")
     async def name_autocomplete(
