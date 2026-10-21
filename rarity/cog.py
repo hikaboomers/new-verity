@@ -182,6 +182,41 @@ def fancy(text: str) -> str:
     return "".join(out)
 
 
+_SMALL_CAPS = dict(zip(
+    "abcdefghijklmnopqrstuvwxyz",
+    "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡxʏᴢ",
+))
+
+
+def sc(text: str) -> str:
+    """Small caps for labels: easy to read, looks neat. Ratings: ʀᴀʀɪᴛʏ"""
+    return "".join(_SMALL_CAPS.get(ch.lower(), ch) for ch in text)
+
+
+def _shift(text: str, upper: int, lower: int, digit: int | None = None) -> str:
+    out = []
+    for ch in text:
+        if "A" <= ch <= "Z":
+            out.append(chr(upper + ord(ch) - ord("A")))
+        elif "a" <= ch <= "z":
+            out.append(chr(lower + ord(ch) - ord("a")))
+        elif digit is not None and "0" <= ch <= "9":
+            out.append(chr(digit + ord(ch) - ord("0")))
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def bold_sans(text: str) -> str:
+    """Bold sans-serif: clean and very readable (used for object names in the list)."""
+    return _shift(text, 0x1D5D4, 0x1D5EE, 0x1D7EC)
+
+
+def script(text: str) -> str:
+    """Bold script: the fancy one (used for the object card title)."""
+    return _shift(text, 0x1D4D0, 0x1D4EA)
+
+
 def short(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
@@ -420,7 +455,7 @@ class RarityView(discord.ui.View):
         lines = [DIVIDER]
         if e.card_url:
             lines.append(f"[View the card here!]({e.card_url})")
-        lines.append(f"-# Rarity scale: {RARITY_MIN:g} (rarest) → {RARITY_MAX:g} (most common)")
+        lines.append(f"-# {sc('Rarity scale')}: {RARITY_MIN:g} {sc('(rarest)')} → {RARITY_MAX:g} {sc('(most common)')}")
         return "\n".join(lines)
 
     def _list_color(self):
@@ -563,8 +598,8 @@ class RarityView(discord.ui.View):
 
     def entry_line(self, e: Entry) -> str:
         text = (
-            f"> ◈ **#{self.rank[e.id]} · {e.name}**\n"
-            f"> {e.emoji_str} Rarity: `{e.rarity:g}`  `{rarity_bar(e.rarity)}`"
+            f"> ◈ **#{self.rank[e.id]}** · {bold_sans(e.name)}\n"
+            f"> {e.emoji_str} {sc('Rarity')}: `{e.rarity:g}`  `{rarity_bar(e.rarity)}`"
         ).replace(">  ", "> ")
         if e.ability:
             text += f"\n> *✦ {short(e.ability, 60)}*"
@@ -572,25 +607,25 @@ class RarityView(discord.ui.View):
 
     def list_embed(self) -> discord.Embed:
         body = "\n\n".join(self.entry_line(e) for e in self.page_entries())
-        page_text = f"Page {self.page + 1}/{self.total_pages}  {page_bar(self.page, self.total_pages)}  •  "
+        page_text = f"{sc('Page')} {self.page + 1}/{self.total_pages}  {page_bar(self.page, self.total_pages)}  •  "
         start = self.page * PER_PAGE
         end = min(start + PER_PAGE, len(self.entries))
-        showing = f"\n-# ❖ Showing {start + 1}–{end} of {len(self.entries)}" if self.entries else ""
+        showing = f"\n-# ❖ {sc('Showing')} {start + 1}–{end} {sc('of')} {len(self.entries)}" if self.entries else ""
 
         if self.results_title:
             count = len(self.entries)
             embed = discord.Embed(
                 title=f"🔎 {self.results_title}",
                 description=(
-                    f"-# Found **{count}** object{'s' if count != 1 else ''} • "
-                    f"pick one below to see its ability{showing}\n{DIVIDER}\n\n{body}"
+                    f"-# {sc('Found')} **{count}** {sc('object' + ('s' if count != 1 else ''))} • "
+                    f"{sc('pick one below to see its ability')}{showing}\n{DIVIDER}\n\n{body}"
                 ),
                 color=SEARCH_COLOR,
             )
         else:
             embed = discord.Embed(
                 title=f"✦ {fancy(TITLE)} ✦",
-                description=f"-# Lower number = rarer • {len(self.all)} objects{showing}\n{self._spectrum()}\n{DIVIDER}\n\n{body}",
+                description=f"-# {sc('Lower number = rarer')} • {len(self.all)} {sc('objects')}{showing}\n{self._spectrum()}\n{DIVIDER}\n\n{body}",
                 color=self._list_color(),
             )
         if getattr(self, "easter", None):
@@ -619,19 +654,19 @@ class RarityView(discord.ui.View):
 
     def detail_embed(self, e: Entry) -> discord.Embed:
         embed = discord.Embed(
-            title=f"❖ {e.emoji_str} {e.name} ❖".replace("  ", " "),
+            title=f"❖ {e.emoji_str} {script(e.name)} ❖".replace("  ", " "),
             description=self._detail_description(e),
             color=gradient_color(self._rank_t(e)),
         )
         embed.add_field(
-            name="Rarity", value=f"`{e.rarity:g}`\n`{rarity_bar(e.rarity)}`", inline=True
+            name=sc("Rarity"), value=f"`{e.rarity:g}`\n`{rarity_bar(e.rarity)}`", inline=True
         )
         embed.add_field(
-            name="Tier", value=f"`#{self.rank[e.id]} / {len(self.all)}`", inline=True
+            name=sc("Tier"), value=f"`#{self.rank[e.id]} / {len(self.all)}`", inline=True
         )
         if e.attack is not None and e.health is not None:
             embed.add_field(
-                name="Stats", value=f"`{e.attack} ATK • {e.health} HP`", inline=True
+                name=sc("Stats"), value=f"`{e.attack} ATK • {e.health} HP`", inline=True
             )
 
         ability_name = e.ability or "Melody wheres the name of this."
@@ -664,7 +699,7 @@ class RarityView(discord.ui.View):
         options_src = self.page_entries() if self.entries else self.suggestions[:25]
         if options_src:
             select = discord.ui.Select(
-                placeholder=(
+                placeholder=sc(
                     "Inspect"
                     if self.entries
                     else "Did you mean this?"
@@ -726,7 +761,7 @@ class RarityView(discord.ui.View):
 
     def _add_button(self, label, callback, style, emoji=None, row=None, disabled=False):
         button = discord.ui.Button(
-            label=label, style=style, emoji=emoji, row=row, disabled=disabled
+            label=sc(label) if label else label, style=style, emoji=emoji, row=row, disabled=disabled
         )
         button.callback = callback
         self.add_item(button)
