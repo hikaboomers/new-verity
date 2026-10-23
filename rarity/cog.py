@@ -1743,7 +1743,7 @@ class RarityView(discord.ui.View):
             self._add_button("Back to list", self._back, self._pri(), "↩️", row=0)
             self._add_button(None, self._next_obj, discord.ButtonStyle.secondary, "▶️", row=0)
             self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=0)
-            self._add_button("Menu", self._open_menu, discord.ButtonStyle.secondary, "☰", row=0)
+            self._add_button("☰ Menu", self._open_menu, discord.ButtonStyle.secondary, row=0)
             return
 
         # Row 0: inspect dropdown (doubles as the suggestions picker)
@@ -1785,7 +1785,7 @@ class RarityView(discord.ui.View):
             )
             self._add_button("Next", self._next, self._pri(), "➡️", row=1, disabled=no_next)
         self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=1)
-        self._add_button("Menu", self._open_menu, discord.ButtonStyle.secondary, "☰", row=1)
+        self._add_button("☰ Menu", self._open_menu, discord.ButtonStyle.secondary, row=1)
 
         # Row 2: only when needed
         if self.results_title:
