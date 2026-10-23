@@ -105,6 +105,16 @@ LAYOUTS = {
     "stack": ("Stack", 6, "Each object with its own rarity strip"),
     "timeline": ("Timeline", 8, "A vertical line with a node per object"),
     "sheet": ("Sheet", 6, "Rarity, attack and health bars"),
+    "arrows": ("Arrows", 16, "One arrow line per object"),
+    "quote": ("Quote", 6, "Each object in its own quote block"),
+    "badges": ("Badges", 12, "Rank, name and rarity as little badges"),
+    "poster": ("Poster", 4, "Huge names with the rarity under them"),
+    "gauge": ("Gauge", 8, "A gauge and the top percent for each object"),
+    "duo": ("Duo", 20, "Two columns of names in a box"),
+    "rail": ("Rail", 8, "A coloured rail down the side of each object"),
+    "statline": ("Statline", 10, "Attack, health and rarity on one line"),
+    "plaque": ("Plaque", 6, "Framed names in your theme's frame"),
+    "heat": ("Heat", 10, "A row of heat squares for each object"),
 }
 
 # most-caught leaderboard: name -> (button label, how far back; None = all time)
@@ -477,6 +487,10 @@ def dot_sep(text: str) -> str:
     return re.sub(r"\S+", lambda m: "·".join(m.group(0).upper()), text)
 
 
+bold_script = _map(0x1D4D0, 0x1D4EA)
+overline = _combine("\u0305")
+
+
 @dataclass(frozen=True)
 class FontStyle:
     label_name: str  # shown in the font picker and on the Font button
@@ -491,7 +505,7 @@ def _u(name: str, fn) -> FontStyle:
     return FontStyle(name, fn, fn, fn, fn)
 
 
-# Discord can't load real font files, so these are Unicode lookalikes. 20 fonts + Off.
+# Discord can't load real font files, so these are Unicode lookalikes. 35 fonts + Off.
 FONTS: dict[str, FontStyle] = {
     "default": FontStyle("Default", fancy, bold_sans, script, sc),
     "coolvetica": FontStyle("Coolvetica", bold_sans, bold_sans, bold_sans, sans),
@@ -532,6 +546,8 @@ FONTS: dict[str, FontStyle] = {
     "leet": _u("L33t", leet),
     "brackets": _u("Brackets", brackets),
     "dotsep": _u("Dotted Caps", dot_sep),
+    "boldscript": _u("Bold Script", bold_script),
+    "overline": _u("Overline", overline),
     "off": _u("Off", str),
 }
 
@@ -548,6 +564,7 @@ class Theme:
     accent: int | None  # embed colour; None = the rarity gradient
     top: str = ""  # small flourish line at the very top of every screen
     nav: str = "primary"  # button colour for the main buttons: primary / secondary / success / danger
+    bottom: str = ""  # small flourish above the footnote; empty = same as the top one
 
 
 THEMES: dict[str, Theme] = {
@@ -566,6 +583,14 @@ THEMES: dict[str, Theme] = {
     "ice": Theme("Ice", "❄ ━━━━━━━ ❅ ━━━━━━━ ❄", ("❄", "❄"), ("❅", "❅"), ("◆", "◇"), "❄", "❅", 0xA8E6FF, "❄ ❅ ❆ ❅ ❄"),
     "blood": Theme("Blood", "✠ ━━━━━━━━━ ☠ ━━━━━━━━━ ✠", ("✠", "✠"), ("☠", "☠"), ("▮", "▯"), "†", "✠", 0x8B0000, "† ‡ † ‡ †", "danger"),
     "matrix": Theme("Matrix", "0101010101010101010101", ("[", "]"), ("<", ">"), ("1", "0"), "$", "#", 0x00FF41, "01001000 01101001", "success"),
+    "christmas": Theme("Christmas", "🎄 ❄ ━━━━━ 🎁 ━━━━━ ❄ 🎄", ("🎄", "🎄"), ("🎁", "🎁"), ("▮", "▯"), "❄", "🎅", 0xC0392B, "🎄 ❄ 🎁 ❄ 🎄", "danger", "❄ 🎅 ❄ 🎅 ❄"),
+    "halloween": Theme("Halloween", "🎃 ━━━━━ 🦇 ━━━━━ 🎃", ("🎃", "🎃"), ("🦇", "🦇"), ("█", "░"), "🕸", "🕯", 0xFF7518, "🦇 🎃 🦇 🎃 🦇", "danger"),
+    "sunset": Theme("Sunset", "🌅 ▁▂▃▄▅▆▇ 🌇", ("🌅", "🌅"), ("🌇", "🌇"), ("▰", "▱"), "☀", "☼", 0xFF7E5F, "☼ ░▒▓ ☀ ▓▒░ ☼"),
+    "aurora": Theme("Aurora", "✧ ～～～～～～～ ✧ ～～～～～～～ ✧", ("🌌", "🌌"), ("✧", "✧"), ("▰", "▱"), "✧", "☾", 0x1ABC9C, "☾ ･ﾟ✧ ～ ✧ﾟ･ ☽", "success"),
+    "cyber": Theme("Cyber", "◢◤◢◤◢◤◢◤◢◤◢◤◢◤◢◤", ("◢", "◣"), ("◥", "◤"), ("▰", "▱"), "»", "◈", 0x00E5FF, "◢◤ ▓▒░ SYSTEM ONLINE ░▒▓ ◥◣", "success"),
+    "autumn": Theme("Autumn", "🍂 ━━━━━ 🍁 ━━━━━ 🍂", ("🍁", "🍁"), ("🍂", "🍂"), ("▮", "▯"), "🍂", "🍁", 0xD35400, "🍂 🍁 🍂 🍁 🍂"),
+    "coffee": Theme("Coffee", "☕ ─────── ◌ ─────── ☕", ("☕", "☕"), ("🥐", "🥐"), ("■", "□"), "☕", "◌", 0x8B5A2B, "☕ ･ ･ ･ ☕ ･ ･ ･ ☕"),
+    "pixel": Theme("Pixel", "▀▄▀▄▀▄▀▄▀▄▀▄▀▄▀▄▀▄", ("▐", "▌"), ("▐", "▌"), ("■", "□"), "►", "▪", 0xFFCC00, "▀▄▀▄ PLAYER 1 ▄▀▄▀", "success"),
     "gold": Theme("Gold", "★ ━━━━━━━━━ ✪ ━━━━━━━━━ ★", ("★", "★"), ("✪", "✪"), ("◼", "◻"), "✪", "★", 0xFFD700, "☆ ★ ☆ ★ ☆"),
 }
 
@@ -1360,7 +1385,8 @@ class RarityView(discord.ui.View):
             emb.description = f"-# {hint}\n{emb.description or ''}"
         if self.th.top:
             emb.description = f"-# {self.th.top}\n{emb.description or ''}"
-        emb.add_field(name="\u200b", value=FOOTNOTE, inline=False)
+        flourish = self.th.bottom or self.th.top
+        emb.add_field(name="\u200b", value=(f"-# {flourish}\n" if flourish else "") + FOOTNOTE, inline=False)
         return emb
 
     def stats_embed(self) -> discord.Embed:
@@ -1523,6 +1549,89 @@ class RarityView(discord.ui.View):
                     )
                 blocks.append(block)
             return "\n\n".join(blocks)
+        if self.layout == "arrows":
+            return "\n".join(
+                f"{self._dot(e)} `#{self.rank[e.id]}` ➜ {self.st.obj(e.name)}{self._star(e)} ➜ **{e.rarity:g}**" for e in shown
+            )
+        if self.layout == "quote":
+            blocks = []
+            for e in shown:
+                block = (
+                    f"> ### {self._dot(e)} {self.st.obj(e.name)}{self._star(e)}\n"
+                    f"> -# #{self.rank[e.id]} · {self.st.label('Rarity')} `{e.rarity:g}` `{self.bar(e.rarity)}`"
+                )
+                if e.ability:
+                    block += f"\n> *{self.th.bullet} {short(e.ability, 60)}*"
+                blocks.append(block)
+            return "\n\n".join(blocks)
+        if self.layout == "badges":
+            return "\n".join(
+                f"{self._dot(e)} `#{self.rank[e.id]}` `{short(e.name.replace('`', chr(39)), 20)}` `{e.rarity:g}`" for e in shown
+            )
+        if self.layout == "poster":
+            return "\n".join(
+                f"# {self._dot(e)} {self.st.obj(e.name)}{self._star(e)}\n"
+                f"-# #{self.rank[e.id]} · {e.emoji_str} {self.st.label('Rarity')} `{e.rarity:g}` `{self.bar(e.rarity)}`".replace("  ", " ")
+                for e in shown
+            )
+        if self.layout == "gauge":
+            total = max(1, len(self.all))
+            blocks = []
+            for e in shown:
+                pct = max(1, round(self.rank[e.id] / total * 100))
+                blocks.append(
+                    f"{self._dot(e)} **{self.st.obj(e.name)}**{self._star(e)} · `{e.rarity:g}`\n"
+                    f"`{self.bar(e.rarity)}` {self.th.mark} {self.st.label('top')} `{pct}%`"
+                )
+            return "\n".join(blocks)
+        if self.layout == "duo":
+            names = [f"{self.rank[e.id]:>3} {short(e.name.replace('`', chr(39)), 12):<12} {e.rarity:>5g}" for e in shown]
+            half = math.ceil(len(names) / 2)
+            left, right = names[:half], names[half:]
+            rows = ["┌" + "─" * 24 + "┬" + "─" * 24 + "┐"]
+            for i in range(half):
+                r = right[i] if i < len(right) else ""
+                rows.append(f"│ {left[i]:<22} │ {r:<22} │")
+            rows.append("└" + "─" * 24 + "┴" + "─" * 24 + "┘")
+            return "```\n" + "\n".join(rows) + "\n```"
+        if self.layout == "rail":
+            blocks = []
+            for e in shown:
+                lines = [
+                    f"▌ {self._dot(e)} **{self.st.obj(e.name)}**{self._star(e)} · #{self.rank[e.id]}",
+                    f"▌ {e.emoji_str} `{e.rarity:g}` `{self.bar(e.rarity)}`".replace("  ", " "),
+                ]
+                if e.ability:
+                    lines.append(f"▌ *{self.th.bullet} {short(e.ability, 60)}*")
+                blocks.append("\n".join(lines))
+            return "\n\n".join(blocks)
+        if self.layout == "statline":
+            lines = []
+            for e in shown:
+                stats = f" ⚔️`{e.attack}` ❤️`{e.health}`" if e.attack is not None and e.health is not None else ""
+                lines.append(
+                    f"{self._dot(e)} **#{self.rank[e.id]}** {self.st.obj(e.name)}{self._star(e)}{stats} {self.th.mark} `{e.rarity:g}`"
+                )
+            return "\n".join(lines)
+        if self.layout == "plaque":
+            left, right = self.th.card_frame
+            blocks = []
+            for e in shown:
+                title = f"{left} {self.st.card(e.name)}{self._star(e)} {right}".strip()
+                blocks.append(
+                    f"**{title}**\n"
+                    f"-# #{self.rank[e.id]} · {e.emoji_str} {self.st.label('Rarity')} `{e.rarity:g}` `{self.bar(e.rarity)}`".replace("  ", " ")
+                )
+            return f"\n{self.th.divider}\n".join(blocks)
+        if self.layout == "heat":
+            blocks = []
+            for e in shown:
+                hot = 10 - max(1, round(rarity_fraction(e.rarity) * 10)) + 1
+                blocks.append(
+                    f"**#{self.rank[e.id]}** · {self.st.obj(e.name)}{self._star(e)} · `{e.rarity:g}`\n"
+                    f"{self._dot(e) * hot}{'⬛' * (10 - hot)}"
+                )
+            return "\n".join(blocks)
         if self.layout == "grid":
             return ""  # drawn as embed fields in list_embed
         if self.layout == "spotlight" and shown:
@@ -1606,7 +1715,7 @@ class RarityView(discord.ui.View):
             lines.append(
                 "-# ✓ counts catches even if the balls were traded away"
                 if self.top_method in ("original", "history")
-                else "-# ⚠ counts balls by who holds them now, traded-away catches can't be tracked here"
+                else "-# merry christmas"
             )
             embed.description = "\n".join(lines)
         embed.set_footer(text=self.footer())
