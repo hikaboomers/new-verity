@@ -74,8 +74,10 @@ EASTER = {
 }
 
 SECRET_PHRASE_SKIP_ZERO = True  # the secret phrase skips objects with rarity 0.0 or lower
-SECRET_PHRASE = "asdfghjklcodex4life"  # type this in Search to get the rarest object (once per user). "" = off
-PHRASE_CLAIMS_FILE = Path(__file__).parent / "secret_phrase_claims.json"
+SECRET_PHRASE = "12393238328"  # type this in Search for a prize (50%: rarest object, 50%: random object with the rarest special). "" = off
+SECRET_PHRASE_USES = 3  # how many times each person can use it
+SECRET_MIN_CATCH_SECONDS = 3.0  # secret objects show a catch time of at least this (plus up to 5 more seconds)
+PHRASE_USES_FILE = Path(__file__).parent / "secret_phrase_uses.json"
 
 SECRET_BALL_ID: int | None = None  # None = random ball (weighted by rarity); or a fixed ball id
 CLAIMS_FILE = Path(__file__).parent / "secret_claims.json"  # who already used the secret button
@@ -84,6 +86,7 @@ FONT_DEFAULT = "default"  # default font for new users: default / coolvetica / v
 HIDE_ZERO_DEFAULT = False  # True = hide objects with rarity 0.0 or lower until the user shows them
 PREFS_FILE = Path(__file__).parent / "rarity_prefs.json"  # remembers each user's font + hide choice
 
+THEME_DEFAULT = "classic"  # decoration style for new users (see THEMES)
 LAYOUT_DEFAULT = "cards"
 # name -> (label, objects per page, short description shown in the layout picker)
 LAYOUTS = {
@@ -96,6 +99,12 @@ LAYOUTS = {
     "grid": ("Grid", 12, "Small tiles in three columns"),
     "tree": ("Tree", 6, "Branch-style entries"),
     "dots": ("Dots", 14, "Receipt style with dotted lines"),
+    "banner": ("Banner", 5, "Big headings with the rarity under each"),
+    "ledger": ("Ledger", 10, "Boxed table with borders"),
+    "chips": ("Chips", 24, "Names as tags, many per page"),
+    "stack": ("Stack", 6, "Each object with its own rarity strip"),
+    "timeline": ("Timeline", 8, "A vertical line with a node per object"),
+    "sheet": ("Sheet", 6, "Rarity, attack and health bars"),
 }
 
 # most-caught leaderboard: name -> (button label, how far back; None = all time)
@@ -394,6 +403,80 @@ def wide(text: str) -> str:
     return bold_sans("".join(out))
 
 
+gothic = _map(0x1D504, 0x1D51E, None, {"C": "ℭ", "H": "ℌ", "I": "ℑ", "R": "ℜ", "Z": "ℨ"})
+cursive = _map(
+    0x1D49C, 0x1D4B6, None,
+    {"B": "ℬ", "E": "ℰ", "F": "ℱ", "H": "ℋ", "I": "ℐ", "L": "ℒ", "M": "ℳ", "R": "ℛ", "e": "ℯ", "g": "ℊ", "o": "ℴ"},
+)
+_parens = _map(0x1F110, 0x249C)
+_dark_bubble = _map(0x1F150, 0x1F150)
+
+
+def parens(text: str) -> str:
+    return _parens(text)
+
+
+def dark_bubble(text: str) -> str:
+    return _dark_bubble(text.upper())
+
+
+_FLIP = dict(
+    zip(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?!.,",
+        "ɐqɔpǝɟᵷɥᴉɾʞlɯuodbɹsʇnʌʍxʎz∀qƆpƎℲפHIſʞ˥WNOԀQɹS┴∩ΛMXʎZ0ƖᄅƐㄣϛ9ㄥ86¿¡˙'",
+    )
+)
+
+
+def upside_down(text: str) -> str:
+    return "".join(_FLIP.get(ch, ch) for ch in reversed(text))
+
+
+_SUPER = dict(zip("abcdefghijklmnopqrstuvwxyz0123456789", "ᵃᵇᶜᵈᵉᶠᵍʰⁱʲᵏˡᵐⁿᵒᵖᵠʳˢᵗᵘᵛʷˣʸᶻ⁰¹²³⁴⁵⁶⁷⁸⁹"))
+
+
+def superscript(text: str) -> str:
+    return "".join(_SUPER.get(ch.lower(), ch) for ch in text)
+
+
+def _combine(mark: str):
+    def convert(text: str) -> str:
+        return "".join(ch + mark if ch.isalnum() else ch for ch in text)
+
+    return convert
+
+
+strike = _combine("\u0336")
+underline = _combine("\u0332")
+slashed = _combine("\u0338")
+
+
+def alt_case(text: str) -> str:
+    out, upper = [], False
+    for ch in text:
+        if ch.isalpha():
+            out.append(ch.upper() if upper else ch.lower())
+            upper = not upper
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+_LEET_MAP = str.maketrans("aeiostAEIOST", "431057431057")
+
+
+def leet(text: str) -> str:
+    return text.translate(_LEET_MAP)
+
+
+def brackets(text: str) -> str:
+    return re.sub(r"(\S+)", r"【\1】", text)
+
+
+def dot_sep(text: str) -> str:
+    return re.sub(r"\S+", lambda m: "·".join(m.group(0).upper()), text)
+
+
 @dataclass(frozen=True)
 class FontStyle:
     label_name: str  # shown in the font picker and on the Font button
@@ -436,7 +519,54 @@ FONTS: dict[str, FontStyle] = {
     "negsquared": _u("Blocks", neg_squared),
     "clean": _u("Clean Sans", sans),
     "arcade": _u("Arcade", lambda t: mono(t.upper())),
+    "gothic": _u("Gothic", gothic),
+    "cursive": _u("Cursive", cursive),
+    "parens": _u("Parentheses", parens),
+    "darkbubble": _u("Dark Bubble", dark_bubble),
+    "upsidedown": _u("Upside Down", upside_down),
+    "superscript": _u("Tiny Raised", superscript),
+    "strike": _u("Strikethrough", strike),
+    "underline": _u("Underline", underline),
+    "slashed": _u("Slashed", slashed),
+    "alt": _u("aLtErNaTiNg", alt_case),
+    "leet": _u("L33t", leet),
+    "brackets": _u("Brackets", brackets),
+    "dotsep": _u("Dotted Caps", dot_sep),
     "off": _u("Off", str),
+}
+
+
+@dataclass(frozen=True)
+class Theme:
+    name: str
+    divider: str  # the line between sections
+    frame: tuple[str, str]  # around the menu title
+    card_frame: tuple[str, str]  # around object card titles
+    bar: tuple[str, str]  # filled / empty piece of every bar
+    bullet: str  # in front of ability text
+    mark: str  # small marker (page info line)
+    accent: int | None  # embed colour; None = the rarity gradient
+    top: str = ""  # small flourish line at the very top of every screen
+    nav: str = "primary"  # button colour for the main buttons: primary / secondary / success / danger
+
+
+THEMES: dict[str, Theme] = {
+    "classic": Theme("Classic", DIVIDER, ("✦", "✦"), ("❖", "❖"), ("▰", "▱"), "✦", "❖", None),
+    "neon": Theme("Neon", "▰▱▰▱▰▱▰▱▰▱▰▱▰▱▰▱▰▱", ("⚡", "⚡"), ("🔷", "🔷"), ("█", "░"), "⚡", "◈", 0xFF2BD6, "⚡ ▰▱▰▱▰▱ ⚡", "success"),
+    "royal": Theme("Royal", "♔ ━━━━━━━ ♛ ━━━━━━━ ♔", ("♛", "♛"), ("♔", "♔"), ("◆", "◇"), "♦", "♚", 0xD4AF37, "♔ ✧ ♛ ✧ ♔"),
+    "retro": Theme("Retro", "▓▒░▒▓▒░▒▓▒░▒▓▒░▒▓▒░", ("»", "«"), ("[", "]"), ("■", "□"), ">", "▸", 0x39FF14, "░▒▓█▓▒░", "success"),
+    "ocean": Theme("Ocean", "≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈", ("🌊", "🌊"), ("🐚", "🐚"), ("●", "○"), "≈", "◌", 0x1E90FF, "≈ ≋ ≈ ≋ ≈"),
+    "sakura": Theme("Sakura", "❀ ─────── ✿ ─────── ❀", ("❀", "❀"), ("✿", "✿"), ("♥", "♡"), "✿", "❁", 0xFF8FB1, "✿ ❀ ✿ ❀ ✿"),
+    "ember": Theme("Ember", "🔥━━━━━━━━━━━━━━━━🔥", ("🔥", "🔥"), ("🔶", "🔶"), ("▮", "▯"), "▸", "◆", 0xE67E22, "🔥 ▲ 🔥 ▲ 🔥", "danger"),
+    "mono": Theme("Mono", "────────────────────", ("", ""), ("", ""), ("━", "─"), "·", "·", 0x2B2D31, "", "secondary"),
+    "galaxy": Theme("Galaxy", "⋆｡°✩ ━━━━━━━ ✩°｡⋆", ("✧", "✧"), ("✦", "✦"), ("★", "☆"), "✧", "⋆", 0x6C5CE7, "･ﾟ✧ *:･ﾟ✧ *:･ﾟ✧"),
+    "forest": Theme("Forest", "🌿━━━━━🌲━━━━━🌿", ("🌲", "🌲"), ("🍃", "🍃"), ("▮", "▯"), "🌱", "❧", 0x2ECC71, "🌿 🍃 🌿 🍃 🌿", "success"),
+    "candy": Theme("Candy", "🍬 ─── 🍭 ─── 🍬", ("🍭", "🍭"), ("🍬", "🍬"), ("●", "○"), "♡", "♡", 0xFF6FB5, "♡ ･ﾟ: *✧･ﾟ:* ♡"),
+    "vapor": Theme("Vapor", "▁▂▃▄▅▆▇█▇▆▅▄▃▂▁", ("▓", "▓"), ("▒", "▒"), ("▰", "▱"), "▸", "▓", 0xB967FF, "▁▂▃▄▅▆▇█", "success"),
+    "ice": Theme("Ice", "❄ ━━━━━━━ ❅ ━━━━━━━ ❄", ("❄", "❄"), ("❅", "❅"), ("◆", "◇"), "❄", "❅", 0xA8E6FF, "❄ ❅ ❆ ❅ ❄"),
+    "blood": Theme("Blood", "✠ ━━━━━━━━━ ☠ ━━━━━━━━━ ✠", ("✠", "✠"), ("☠", "☠"), ("▮", "▯"), "†", "✠", 0x8B0000, "† ‡ † ‡ †", "danger"),
+    "matrix": Theme("Matrix", "0101010101010101010101", ("[", "]"), ("<", ">"), ("1", "0"), "$", "#", 0x00FF41, "01001000 01101001", "success"),
+    "gold": Theme("Gold", "★ ━━━━━━━━━ ✪ ━━━━━━━━━ ★", ("★", "★"), ("✪", "✪"), ("◼", "◻"), "✪", "★", 0xFFD700, "☆ ★ ☆ ★ ☆"),
 }
 
 
@@ -543,6 +673,54 @@ class ClaimStore:
                 log.exception("could not save")
 
 
+class UseStore:
+    """Counts how many times each user used something, up to a limit (saved to a JSON file)."""
+
+    def __init__(self, path: Path, limit: int):
+        self.path = path
+        self.limit = limit
+        self.lock = asyncio.Lock()
+        self.counts: dict[int, int] = {}
+        for candidate in (path, Path.cwd() / path.name):
+            try:
+                raw = json.loads(candidate.read_text(encoding="utf-8"))
+                self.counts = {int(k): int(v) for k, v in raw.items()}
+                self.path = candidate
+                break
+            except (FileNotFoundError, ValueError, OSError, AttributeError):
+                continue
+
+    def used(self, user_id: int) -> int:
+        return self.counts.get(user_id, 0)
+
+    def _save(self):
+        data = json.dumps(self.counts)
+        for candidate in (self.path, Path.cwd() / self.path.name):
+            try:
+                candidate.write_text(data, encoding="utf-8")
+                self.path = candidate
+                return
+            except OSError:
+                continue
+        log.warning("rarity: could not save %s, uses only last until the bot restarts", self.path.name)
+
+    async def try_use(self, user_id: int) -> int | None:
+        """Use one up. Returns which use this was (1, 2, ...) or None if none are left."""
+        async with self.lock:
+            n = self.counts.get(user_id, 0)
+            if n >= self.limit:
+                return None
+            self.counts[user_id] = n + 1
+            self._save()
+            return n + 1
+
+    async def release(self, user_id: int):
+        async with self.lock:
+            if self.counts.get(user_id, 0) > 0:
+                self.counts[user_id] -= 1
+                self._save()
+
+
 class PrefStore:
     """Per-user menu choices (font, hide 0.0), saved to a JSON file."""
 
@@ -599,6 +777,103 @@ async def top_catches(period: str, limit: int = 25) -> list[tuple[int, int]]:
     return rows
 
 
+def _has_field(model, name: str) -> bool:
+    try:
+        model._meta.get_field(name)
+        return True
+    except Exception:
+        return False
+
+
+_catcher_cache: dict[str, tuple[float, tuple[list[tuple[int, int]], str]]] = {}
+
+
+async def top_catchers(period: str, limit: int = 10) -> tuple[list[tuple[int, int]], str]:
+    """([(discord id, catches)], method) for the period, most catches first.
+
+    method says how catches were attributed:
+      "original" = a stored original-catcher field, "history" = first giver in the trade history
+      (both keep counting balls that were traded away), "owner" = whoever holds the ball now.
+    """
+    cached = _catcher_cache.get(period)
+    now = time.monotonic()
+    if cached and now - cached[0] < TOP_CACHE_SECONDS:
+        return cached[1]
+    delta = PERIODS[period][1]
+    since = datetime.now(timezone.utc) - delta if delta else None
+    result: tuple[list[tuple[int, int]], str] | None = None
+
+    if DJANGO:
+        import bd_models.models as bdm
+        from django.db.models import Count, F, OuterRef, Subquery
+        from django.db.models.functions import Coalesce
+
+        base = BallInstance.objects.all()
+        if since:
+            base = base.filter(catch_date__gte=since)
+
+        async def collect(qs, key: str) -> list[tuple[int, int]]:
+            return [(r[key], r["total"]) async for r in qs if r[key] is not None]
+
+        pairs, method = None, "owner"
+        # 1) a stored "original catcher" column
+        field = next(
+            (f for f in ("original_player", "first_owner", "original_owner", "catcher") if _has_field(BallInstance, f)),
+            None,
+        )
+        if field:
+            try:
+                qs = base.values(f"{field}_id").annotate(total=Count("id")).order_by("-total")[:limit]
+                pairs, method = await collect(qs, f"{field}_id"), "original"
+            except Exception:
+                log.warning("rarity: original-catcher query failed", exc_info=True)
+        # 2) the trade history: whoever gave the ball away first caught it
+        trade_obj, trade = getattr(bdm, "TradeObject", None), getattr(bdm, "Trade", None)
+        if pairs is None and trade_obj and trade:
+            date_field = next((f for f in ("date", "trade_date", "created_at") if _has_field(trade, f)), None)
+            if date_field and all(_has_field(trade_obj, f) for f in ("ballinstance", "player", "trade")):
+                try:
+                    first_giver = (
+                        trade_obj.objects.filter(ballinstance=OuterRef("pk"))
+                        .order_by(f"trade__{date_field}")
+                        .values("player_id")[:1]
+                    )
+                    qs = (
+                        base.annotate(catcher=Coalesce(Subquery(first_giver), F("player_id")))
+                        .values("catcher")
+                        .annotate(total=Count("id"))
+                        .order_by("-total")[:limit]
+                    )
+                    pairs, method = await collect(qs, "catcher"), "history"
+                except Exception:
+                    log.warning("rarity: trade-history catcher query failed", exc_info=True)
+        # 3) current owner (traded-away balls count for whoever holds them now)
+        if pairs is None:
+            qs = base.values("player_id").annotate(total=Count("id")).order_by("-total")[:limit]
+            pairs, method = await collect(qs, "player_id"), "owner"
+
+        ids = [pk for pk, _ in pairs]
+        discord_ids = {
+            r["pk"]: r["discord_id"] async for r in Player.objects.filter(pk__in=ids).values("pk", "discord_id")
+        }
+        result = ([(discord_ids[pk], n) for pk, n in pairs if pk in discord_ids], method)
+    else:
+        from tortoise.functions import Count
+
+        qs = BallInstance.all()
+        if since:
+            qs = qs.filter(catch_date__gte=since)
+        raw = await qs.annotate(total=Count("id")).group_by("player_id").order_by("-total").limit(limit).values(
+            "player_id", "total"
+        )
+        players = await Player.filter(pk__in=[r["player_id"] for r in raw]).values("pk", "discord_id")
+        discord_ids = {p["pk"]: p["discord_id"] for p in players}
+        result = ([(discord_ids[r["player_id"]], r["total"]) for r in raw if r["player_id"] in discord_ids], "owner")
+
+    _catcher_cache[period] = (now, result)
+    return result
+
+
 def pick_ball():
     pool = [b for b in balls.values() if getattr(b, "enabled", True)]
     if SECRET_BALL_ID is not None:
@@ -619,17 +894,52 @@ def pick_rarest():
     return random.choice([b for b in pool if float(b.rarity) == lowest])
 
 
-async def give_ball(user_id: int, guild_id: int | None, ball):
-    """Create a BallInstance for the user. Returns it."""
+def random_ball():
+    """Any enabled object, at random."""
+    pool = [b for b in balls.values() if getattr(b, "enabled", True)]
+    return random.choice(pool)
+
+
+async def rarest_special():
+    """The special with the lowest rarity number (ties at random). None if the bot has no specials."""
+    try:
+        if DJANGO:
+            from bd_models.models import Special
+
+            pool = [sp async for sp in Special.objects.all()]
+        else:
+            from ballsdex.core.models import Special
+
+            pool = await Special.all()
+    except Exception:
+        log.warning("rarity: could not load specials", exc_info=True)
+        return None
+
+    def rarity_of(sp) -> float:
+        return float(getattr(sp, "rarity", 0) or 0)
+
+    pool = [sp for sp in pool if rarity_of(sp) > 0] or pool
+    if not pool:
+        return None
+    lowest = min(rarity_of(sp) for sp in pool)
+    return random.choice([sp for sp in pool if rarity_of(sp) == lowest])
+
+
+async def give_ball(user_id: int, guild_id: int | None, ball, special=None):
+    """Create a BallInstance for the user. Returns it. (A special can be passed in too.)"""
     atk = random.randint(-20, 20)
     hp = random.randint(-20, 20)
+    # a believable catch time: the object "spawned" a few seconds before it was caught
+    spawned = datetime.now(timezone.utc) - timedelta(seconds=SECRET_MIN_CATCH_SECONDS + random.uniform(0, 5))
     kwargs = dict(
         ball=ball,
         attack_bonus=atk,
         health_bonus=hp,
         server_id=guild_id,
-        spawned_time=datetime.now(timezone.utc),
+        spawned_time=spawned,
     )
+    if special is not None:
+        kwargs["special"] = special
     if DJANGO:
         player, _ = await Player.objects.aget_or_create(discord_id=user_id)
         return await BallInstance.objects.acreate(player=player, **kwargs)
@@ -693,7 +1003,7 @@ class RarityView(discord.ui.View):
         author: discord.abc.User,
         entries: list[Entry],
         claims: ClaimStore,
-        phrase_claims: ClaimStore,
+        phrase_claims: UseStore,
         prefs: PrefStore,
     ):
         super().__init__(timeout=TIMEOUT)
@@ -716,6 +1026,14 @@ class RarityView(discord.ui.View):
         self._has_attachment = False
         self.top_period: str | None = None  # set => showing the most-caught leaderboard
         self.top_rows: list[tuple[Entry, int]] | None = []
+        self.top_kind = "balls"  # "balls" = most caught balls, "players" = players with most catches
+        self.top_players: list[tuple[int, int]] | None = []
+        self.top_method = "owner"
+        self.theme = prefs.get(author.id, "theme", THEME_DEFAULT)
+        if self.theme not in THEMES:
+            self.theme = THEME_DEFAULT
+        self.stats_open = False  # True = showing the dex stats panel
+        self.menu = False  # True = the menu panel is open
         self.picking: str | bool = False  # "font" / "layout" while a picker is open
         self.hide_zero = bool(prefs.get(author.id, "hide_zero", HIDE_ZERO_DEFAULT))
         self.has_zero = any(e.rarity <= 0 for e in entries)
@@ -752,6 +1070,39 @@ class RarityView(discord.ui.View):
         shown = [e for e in self.full if not (self.hide_zero and e.rarity <= 0)]
         self.all = shown or self.full
         self.rank = {e.id: i + 1 for i, e in enumerate(self.all)}
+
+    @property
+    def th(self) -> Theme:
+        return THEMES[self.theme]
+
+    def _pri(self):
+        return getattr(discord.ButtonStyle, self.th.nav, discord.ButtonStyle.primary)
+
+    def bar(self, r: float) -> str:
+        filled = max(1, round(rarity_fraction(r) * 10))
+        full, empty = self.th.bar
+        return full * filled + empty * (10 - filled)
+
+    def sbar(self, value: int, top: int, width: int = 8) -> str:
+        filled = max(0, min(width, round(value / top * width))) if top else 0
+        full, empty = self.th.bar
+        return full * filled + empty * (width - filled)
+
+    def _frame(self, text: str, card: bool = False) -> str:
+        left, right = self.th.card_frame if card else self.th.frame
+        return f"{left} {text.strip()} {right}".strip()
+
+    @property
+    def daily(self) -> Entry | None:
+        """Object of the day: the same for everyone, changes at midnight UTC."""
+        pool = sorted((e for e in self.full if e.rarity > 0), key=lambda e: e.id) or sorted(self.full, key=lambda e: e.id)
+        if not pool:
+            return None
+        return random.Random(datetime.now(timezone.utc).date().isoformat() + "codex").choice(pool)
+
+    def _star(self, e: Entry) -> str:
+        daily = self.daily
+        return " 🌟" if daily and daily.id == e.id else ""
 
     def _dot(self, e: Entry) -> str:
         return SPECTRUM[round(rarity_fraction(e.rarity) * (len(SPECTRUM) - 1))]
@@ -801,7 +1152,9 @@ class RarityView(discord.ui.View):
         self.set_results(f"Results for “{short(query, 60)}”", query, matches, suggestions)
 
     def _detail_description(self, e: Entry) -> str:
-        lines = [DIVIDER, f"{self.st.label('rarest')} {self._strip_for(e)} {self.st.label('common')}"]
+        lines = [self.th.divider, f"{self.st.label('rarest')} {self._strip_for(e)} {self.st.label('common')}"]
+        if self._star(e):
+            lines.insert(0, f"🌟 **{self.st.label('Object of the day')}**")
         pool = self.entries or self.all
         ids = [x.id for x in pool]
         if e.id in ids and len(pool) > 1:
@@ -816,6 +1169,8 @@ class RarityView(discord.ui.View):
     def _list_color(self):
         """Gold on the first pages (rarest), fading to grey as you page towards the common ones."""
         shown = self.page_entries()
+        if self.th.accent:
+            return discord.Color(self.th.accent)
         return gradient_color(self._rank_t(shown[0])) if shown else EMBED_COLOR
 
     def _rank_t(self, e: Entry) -> float:
@@ -854,21 +1209,27 @@ class RarityView(discord.ui.View):
         user_id = interaction.user.id
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            if self.phrase_claims.has(user_id) or not await self.phrase_claims.try_claim(user_id):
-                await interaction.followup.send(
-                    "Shhh. You already used the secret phrase. It only works once.", ephemeral=True
-                )
-                return True
+            use = await self.phrase_claims.try_use(user_id)
         except Exception:
             log.exception("Secret phrase claim failed")
+            await interaction.followup.send("Hm. Error occured, DM kaboomtsarbobm pwease.", ephemeral=True)
+            return True
+        if use is None:
             await interaction.followup.send(
-                "Hm. Error occured, DM kaboomtsarbobm pwease.", ephemeral=True
+                f"Shhh. You already used the secret phrase {SECRET_PHRASE_USES} times. That's all of them.",
+                ephemeral=True,
             )
             return True
 
+        special = None
         try:
-            ball = pick_rarest()
-            instance = await give_ball(user_id, interaction.guild_id, ball)
+            if random.random() < 0.5:  # 50%: a random object with the rarest special
+                special = await rarest_special()
+            if special is not None:
+                ball = random_ball()
+            else:  # the other 50% (or no specials exist): the rarest object in the dex
+                ball = pick_rarest()
+            instance = await give_ball(user_id, interaction.guild_id, ball, special)
         except Exception:
             log.exception("Secret phrase failed")
             await self.phrase_claims.release(user_id)
@@ -881,14 +1242,16 @@ class RarityView(discord.ui.View):
         entry = self.by_id.get(ball.pk)
         atk = getattr(instance, "attack_bonus", 0)
         hp = getattr(instance, "health_bonus", 0)
+        lines = [f"{entry.emoji_str if entry else ''} **{ball.country}** is now yours."]
+        if special is not None:
+            emoji = getattr(special, "emoji", "")
+            lines.append(f"Special: {emoji if isinstance(emoji, str) else ''} **{getattr(special, 'name', 'special')}**")
+        lines.append(f"Rarity `{ball.rarity:g}`")
+        lines.append(f"`ATK {atk:+d}%` • `HP {hp:+d}%`")
+        lines.append(f"\n-# Shhh. Use {use}/{SECRET_PHRASE_USES}.")
         prize = discord.Embed(
             title="Secret phrase unlocked",
-            description=(
-                f"{entry.emoji_str if entry else ''} **{ball.country}** is now yours.\n"
-                f"Rarity `{ball.rarity:g}`\n"
-                f"`ATK {atk:+d}%` • `HP {hp:+d}%`\n\n"
-                "-# Shhh. This only works once."
-            ),
+            description="\n".join(lines),
             color=rarity_color(float(ball.rarity)),
         )
         if entry and entry.emoji:
@@ -982,13 +1345,66 @@ class RarityView(discord.ui.View):
         if self.picking == "layout":
             hint = f"🤔 {self.st.label('Layout')}: {LAYOUTS[self.layout][0]} • {self.st.label('pick one below, or use the arrows')}"
             emb.description = f"-# {hint}\n{emb.description or ''}"
+        elif self.menu:
+            lab = self.st.label
+            summary = (
+                f"{lab('font')} {self.st.label_name} · {lab('layout')} {LAYOUTS[self.layout][0]} · {lab('theme')} {self.th.name} · "
+                f"{lab('tips')} {lab('on' if self.tips_playing else 'off')}"
+            )
+            emb.description = f"-# ☰ {lab('Menu')} • {lab('pick an action below')}\n-# {summary}\n{emb.description or ''}"
+        elif self.picking == "theme":
+            hint = f"🎨 {self.st.label('Theme')}: {self.th.name} • {self.st.label('pick one below, or use the arrows')}"
+            emb.description = f"-# {hint}\n{emb.description or ''}"
         elif self.picking:
             hint = f"🔤 {self.st.label('Font')}: {self.st.label_name} • {self.st.label('pick one below, or use the arrows')}"
             emb.description = f"-# {hint}\n{emb.description or ''}"
+        if self.th.top:
+            emb.description = f"-# {self.th.top}\n{emb.description or ''}"
         emb.add_field(name="\u200b", value=FOOTNOTE, inline=False)
         return emb
 
+    def stats_embed(self) -> discord.Embed:
+        th = self.th
+        pool = self.all
+        embed = discord.Embed(
+            title=self._frame(f"📊 {self.st.title('Dex stats')}"), color=th.accent or EMBED_COLOR
+        )
+        if not pool:
+            embed.description = "Nothing to show yet."
+            return embed
+        rarities = sorted(e.rarity for e in pool)
+        n = len(pool)
+        avg = sum(rarities) / n
+        med = rarities[n // 2] if n % 2 else (rarities[n // 2 - 1] + rarities[n // 2]) / 2
+        rarest = min(pool, key=lambda e: (e.rarity, e.name.lower()))
+        common = max(pool, key=lambda e: (e.rarity, e.name.lower()))
+        lab = self.st.label
+        lines = [
+            f"📦 **{n}** {lab('objects')} · ⌀ **{avg:.1f}** · {lab('median')} **{med:g}**",
+            f"{self._dot(rarest)} {lab('Rarest')}: {rarest.emoji_str} **{self.st.obj(rarest.name)}** `{rarest.rarity:g}`".replace("  ", " "),
+            f"{self._dot(common)} {lab('Most common')}: {common.emoji_str} **{self.st.obj(common.name)}** `{common.rarity:g}`".replace("  ", " "),
+            th.divider,
+        ]
+        buckets = 10
+        width = (RARITY_MAX - RARITY_MIN) / buckets
+        counts = [0] * buckets
+        for r in rarities:
+            counts[min(buckets - 1, max(0, int((r - RARITY_MIN) // width)))] += 1
+        top = max(counts) or 1
+        full, empty = th.bar
+        for i, c in enumerate(counts):
+            lo = RARITY_MIN + i * width
+            filled = round(c / top * 10)
+            lines.append(f"{SPECTRUM[i]} `{lo:>5.1f}–{lo + width:<5.1f}` `{full * filled}{empty * (10 - filled)}` **{c}**")
+        lines.append(f"-# {lab('how many objects sit in each rarity range')}")
+        embed.description = "\n".join(lines)
+        embed.set_footer(text=self.footer())
+        self._author(embed)
+        return embed
+
     def _base_embed(self) -> discord.Embed:
+        if self.stats_open:
+            return self.stats_embed()
         if self.top_period:
             return self.top_embed()
         if self.focus:
@@ -999,17 +1415,17 @@ class RarityView(discord.ui.View):
 
     def entry_line(self, e: Entry) -> str:
         text = (
-            f"> {self._dot(e)} **#{self.rank[e.id]}** · {self.st.obj(e.name)}\n"
-            f"> {e.emoji_str} {self.st.label('Rarity')}: `{e.rarity:g}`  `{rarity_bar(e.rarity)}`"
+            f"> {self._dot(e)} **#{self.rank[e.id]}** · {self.st.obj(e.name)}{self._star(e)}\n"
+            f"> {e.emoji_str} {self.st.label('Rarity')}: `{e.rarity:g}`  `{self.bar(e.rarity)}`"
         ).replace(">  ", "> ")
         if e.attack is not None and e.health is not None:
             text += f"\n> ⚔️ `{e.attack}`  ❤️ `{e.health}`"
         if e.ability:
-            text += f"\n> *✦ {short(e.ability, 60)}*"
+            text += f"\n> *{self.th.bullet} {short(e.ability, 60)}*"
         return text
 
     def _compact_line(self, e: Entry) -> str:
-        return f"{self._dot(e)} **#{self.rank[e.id]}** {e.emoji_str} {self.st.obj(e.name)} · `{e.rarity:g}`".replace("  ", " ")
+        return f"{self._dot(e)} **#{self.rank[e.id]}** {e.emoji_str} {self.st.obj(e.name)}{self._star(e)} · `{e.rarity:g}`".replace("  ", " ")
 
     def render_body(self) -> str:
         shown = self.page_entries()
@@ -1039,11 +1455,11 @@ class RarityView(discord.ui.View):
             blocks = []
             for e in shown:
                 parts = [f"{self._dot(e)} **#{self.rank[e.id]}** · {self.st.obj(e.name)}"]
-                parts.append(f"{e.emoji_str} {self.st.label('Rarity')} `{e.rarity:g}` `{rarity_bar(e.rarity)}`".replace("  ", " ").strip())
+                parts.append(f"{e.emoji_str} {self.st.label('Rarity')} `{e.rarity:g}` `{self.bar(e.rarity)}`".replace("  ", " ").strip())
                 if e.attack is not None and e.health is not None:
                     parts.append(f"⚔️ `{e.attack}`  ❤️ `{e.health}`")
                 if e.ability:
-                    parts.append(f"*✦ {short(e.ability, 60)}*")
+                    parts.append(f"*{self.th.bullet} {short(e.ability, 60)}*")
                 lines = ["╭ " + parts[0]]
                 for i, part in enumerate(parts[1:], 1):
                     lines.append(("╰ " if i == len(parts) - 1 else "├ ") + part)
@@ -1057,23 +1473,73 @@ class RarityView(discord.ui.View):
                 right = f"{e.rarity:g}"
                 rows.append(left + " " + "." * max(2, width - len(left) - len(right) - 2) + " " + right)
             return "```\n" + "\n".join(rows) + "\n```"
+        if self.layout == "banner":
+            return "\n".join(
+                f"## {self._dot(e)} {self.st.obj(e.name)}{self._star(e)}\n"
+                f"-# #{self.rank[e.id]} · {e.emoji_str} {self.st.label('Rarity')} `{e.rarity:g}` `{self.bar(e.rarity)}`".replace("  ", " ")
+                for e in shown
+            )
+        if self.layout == "ledger":
+            top = "┌─────┬────────────────────────┬─────────┐"
+            mid = "├─────┼────────────────────────┼─────────┤"
+            end = "└─────┴────────────────────────┴─────────┘"
+            rows = [top, f"│ {'#':^3} │ {'Name':<22} │ {'Rarity':^7} │", mid]
+            rows += [
+                f"│ {self.rank[e.id]:>3} │ {short(e.name.replace('`', chr(39)), 22):<22} │ {e.rarity:>7g} │"
+                for e in shown
+            ]
+            rows.append(end)
+            return "```\n" + "\n".join(rows) + "\n```"
+        if self.layout == "chips":
+            chips = [f"{self._dot(e)} `{short(e.name.replace('`', chr(39)), 18)}`" for e in shown]
+            return "\n".join("  ".join(chips[i : i + 2]) for i in range(0, len(chips), 2))
+        if self.layout == "stack":
+            lab = self.st.label
+            return "\n\n".join(
+                f"**#{self.rank[e.id]}** · {self.st.obj(e.name)}{self._star(e)}\n"
+                f"{lab('rarest')} {self._strip_for(e)} {lab('common')}"
+                for e in shown
+            )
+        if self.layout == "timeline":
+            lines = []
+            for i, e in enumerate(shown):
+                if i:
+                    lines.append("┃")
+                lines.append(f"● **#{self.rank[e.id]}** {self.st.obj(e.name)}{self._star(e)} · `{e.rarity:g}`")
+                if e.ability:
+                    lines.append(f"┃  *{self.th.bullet} {short(e.ability, 60)}*")
+            return "\n".join(lines)
+        if self.layout == "sheet":
+            blocks = []
+            for e in shown:
+                block = (
+                    f"**#{self.rank[e.id]}** · {self.st.obj(e.name)}{self._star(e)}\n"
+                    f"`RAR {e.rarity:>6g}` `{self.bar(e.rarity)}`"
+                )
+                if e.attack is not None and e.health is not None:
+                    block += (
+                        f"\n`ATK {e.attack:>4}` `{self.sbar(e.attack, self._max_atk, 6)}` "
+                        f"`HP {e.health:>4}` `{self.sbar(e.health, self._max_hp, 6)}`"
+                    )
+                blocks.append(block)
+            return "\n\n".join(blocks)
         if self.layout == "grid":
             return ""  # drawn as embed fields in list_embed
         if self.layout == "spotlight" and shown:
             top, rest = shown[0], shown[1:]
             lines = [
                 f"### {self._dot(top)} #{self.rank[top.id]} · {self.st.card(top.name)}",
-                f"{top.emoji_str} {self.st.label('Rarity')}: `{top.rarity:g}`  `{rarity_bar(top.rarity)}`".replace("  `", " `").strip(),
+                f"{top.emoji_str} {self.st.label('Rarity')}: `{top.rarity:g}`  `{self.bar(top.rarity)}`".replace("  `", " `").strip(),
             ]
             if top.attack is not None and top.health is not None:
                 lines.append(f"⚔️ `{top.attack}`  ❤️ `{top.health}`")
             if top.ability:
-                lines.append(f"*✦ {short(top.ability, 80)}*")
+                lines.append(f"*{self.th.bullet} {short(top.ability, 80)}*")
             if top.description:
                 lines.append(f"> {short(top.description, 180)}")
             text = "\n".join(lines)
             if rest:
-                text += f"\n{DIVIDER}\n" + "\n".join(self._compact_line(e) for e in rest)
+                text += f"\n{self.th.divider}\n" + "\n".join(self._compact_line(e) for e in rest)
             return text
         return "\n\n".join(self.entry_line(e) for e in shown)
 
@@ -1082,7 +1548,7 @@ class RarityView(discord.ui.View):
         page_text = f"{self.st.label('Page')} {self.page + 1}/{self.total_pages}  {page_bar(self.page, self.total_pages)}  •  "
         start = self.page * self.per_page
         end = min(start + self.per_page, len(self.entries))
-        showing = f"\n-# ❖ {self.st.label('Showing')} {start + 1}–{end} {self.st.label('of')} {len(self.entries)}" if self.entries else ""
+        showing = f"\n-# {self.th.mark} {self.st.label('Showing')} {start + 1}–{end} {self.st.label('of')} {len(self.entries)}" if self.entries else ""
 
         if self.results_title:
             count = len(self.entries)
@@ -1090,14 +1556,14 @@ class RarityView(discord.ui.View):
                 title=f"🔎 {self.results_title}",
                 description=(
                     f"-# {self.st.label('Found')} **{count}** {self.st.label('object' + ('s' if count != 1 else ''))} • "
-                    f"{self.st.label('pick one below to see its ability')}{showing}\n{DIVIDER}\n\n{body}"
+                    f"{self.st.label('pick one below to see its ability')}{showing}\n{self.th.divider}\n\n{body}"
                 ),
                 color=SEARCH_COLOR,
             )
         else:
             embed = discord.Embed(
-                title=f"✦ {self.st.title(TITLE)} ✦",
-                description=f"-# {self.st.label('Lower number = rarer')} • {len(self.all)} {self.st.label('objects')}{showing}\n{self._spectrum()}\n{DIVIDER}\n\n{body}",
+                title=self._frame(self.st.title(TITLE)),
+                description=f"-# {self.st.label('Lower number = rarer')} • {len(self.all)} {self.st.label('objects')}{showing}\n{self._spectrum()}\n{self.th.divider}\n\n{body}",
                 color=self._list_color(),
             )
         if getattr(self, "easter", None):
@@ -1106,7 +1572,7 @@ class RarityView(discord.ui.View):
             for e in self.page_entries():
                 embed.add_field(
                     name=short(f"{e.emoji_str} {self.st.obj(e.name)}".strip(), 250),
-                    value=f"{self._dot(e)} #{self.rank[e.id]} · `{e.rarity:g}`\n`{rarity_bar(e.rarity)}`",
+                    value=f"{self._dot(e)} #{self.rank[e.id]} · `{e.rarity:g}`\n`{self.bar(e.rarity)}`",
                     inline=True,
                 )
         embed.set_footer(text=self.footer(page_text))
@@ -1116,26 +1582,59 @@ class RarityView(discord.ui.View):
             embed.set_thumbnail(url=shown[0].emoji.url)
         return embed
 
-    def top_embed(self) -> discord.Embed:
+    def top_players_embed(self) -> discord.Embed:
         label = PERIODS[self.top_period][0]
         embed = discord.Embed(
-            title=f"🏆 {self.st.label('Most caught')} · {self.st.label(label)}", color=0xF1C40F
+            title=f"👥 {self.st.label('Top catchers')} · {self.st.label(label)}", color=self.th.accent or 0xF1C40F
+        )
+        rows = self.top_players
+
+        def who(discord_id: int) -> str:
+            user = self.bot.get_user(discord_id)
+            name = discord.utils.escape_markdown(user.display_name) if user else f"<@{discord_id}>"
+            return name + (" ◀ you" if discord_id == self.author.id else "")
+
+        if rows is None:
+            embed.description = "Couldn't load the catches right now. Try again in a moment."
+        elif not rows:
+            embed.description = f"{self.th.divider}\n\nNobody caught anything here yet."
+        else:
+            top, count = rows[0]
+            lines = [f"### 👑 {who(top)}", f"**{count}** {self.st.label('catches')}", self.th.divider]
+            for i, (did, n) in enumerate(rows[1:], 2):
+                lines.append(f"**#{i}** {who(did)} · `{n}` `{self.sbar(n, count)}`")
+            lines.append(
+                "-# ✓ counts catches even if the balls were traded away"
+                if self.top_method in ("original", "history")
+                else "-# ⚠ counts balls by who holds them now, traded-away catches can't be tracked here"
+            )
+            embed.description = "\n".join(lines)
+        embed.set_footer(text=self.footer())
+        self._author(embed)
+        return embed
+
+    def top_embed(self) -> discord.Embed:
+        if self.top_kind == "players":
+            return self.top_players_embed()
+        label = PERIODS[self.top_period][0]
+        embed = discord.Embed(
+            title=f"🏆 {self.st.label('Most caught')} · {self.st.label(label)}", color=self.th.accent or 0xF1C40F
         )
         rows = self.top_rows
         if rows is None:
             embed.description = "Couldn't load the catches right now. Try again in a moment."
         elif not rows:
-            embed.description = f"{DIVIDER}\n\nNobody caught anything here yet."
+            embed.description = f"{self.th.divider}\n\nNobody caught anything here yet."
         else:
             top, count = rows[0]
             lines = [
                 f"### 👑 {self.st.card(top.name)}",
                 f"{top.emoji_str} **{count}** {self.st.label('catches')}".strip(),
-                DIVIDER,
+                self.th.divider,
             ]
             for i, (e, n) in enumerate(rows[1:], 2):
                 lines.append(
-                    f"{self._dot(e)} **#{i}** {e.emoji_str} {self.st.obj(e.name)} · `{n}` `{stat_bar(n, count)}`".replace("  ", " ")
+                    f"{self._dot(e)} **#{i}** {e.emoji_str} {self.st.obj(e.name)} · `{n}` `{self.sbar(n, count)}`".replace("  ", " ")
                 )
             embed.description = "\n".join(lines)
             if top.emoji:
@@ -1161,12 +1660,12 @@ class RarityView(discord.ui.View):
 
     def detail_embed(self, e: Entry) -> discord.Embed:
         embed = discord.Embed(
-            title=f"❖ {e.emoji_str} {self.st.card(e.name)} ❖".replace("  ", " "),
+            title=self._frame(f"{e.emoji_str} {self.st.card(e.name)}".replace("  ", " "), card=True),
             description=self._detail_description(e),
-            color=gradient_color(self._rank_t(e)),
+            color=self.th.accent or gradient_color(self._rank_t(e)),
         )
         embed.add_field(
-            name=self.st.label("Rarity"), value=f"`{e.rarity:g}`\n`{rarity_bar(e.rarity)}`", inline=True
+            name=self.st.label("Rarity"), value=f"`{e.rarity:g}`\n`{self.bar(e.rarity)}`", inline=True
         )
         embed.add_field(
             name=self.st.label("Tier"), value=(
@@ -1179,8 +1678,8 @@ class RarityView(discord.ui.View):
         if e.attack is not None and e.health is not None:
             embed.add_field(
                 name=self.st.label("Stats"), value=(
-                    f"`ATK {e.attack:>4}` `{stat_bar(e.attack, self._max_atk)}`\n"
-                    f"`HP  {e.health:>4}` `{stat_bar(e.health, self._max_hp)}`"
+                    f"`ATK {e.attack:>4}` `{self.sbar(e.attack, self._max_atk)}`\n"
+                    f"`HP  {e.health:>4}` `{self.sbar(e.health, self._max_hp)}`"
                 ), inline=True
             )
 
@@ -1207,26 +1706,44 @@ class RarityView(discord.ui.View):
             self.add_item(button)
             return
         if self.picking:
-            (self._add_layout_picker if self.picking == "layout" else self._add_font_picker)()
+            {"layout": self._add_layout_picker, "theme": self._add_theme_picker}.get(
+                self.picking, self._add_font_picker
+            )()
+            return
+        if self.stats_open:
+            self._add_button("Back to list", self._close_stats, self._pri(), "↩️", row=0)
+            self._add_button("Top catches", self._top_open, discord.ButtonStyle.secondary, "🏆", row=0)
+            return
+        if self.menu:
+            self._add_menu()
             return
         if self.top_period:
-            for key, (name, _) in PERIODS.items():
-                self._add_button(
-                    name,
-                    self._period_cb(key),
-                    discord.ButtonStyle.success if key == self.top_period else discord.ButtonStyle.secondary,
-                    row=0,
-                )
-            self._add_button("Back to list", self._top_close, discord.ButtonStyle.primary, "↩️", row=1)
+            select = discord.ui.Select(
+                placeholder=self.st.label("Time range"),
+                options=[
+                    discord.SelectOption(label=name, value=key, default=(key == self.top_period))
+                    for key, (name, _) in PERIODS.items()
+                ],
+                row=0,
+            )
+            select.callback = self._guard(self._top_select)
+            self.add_item(select)
+            self._add_button("Back to list", self._top_close, self._pri(), "↩️", row=1)
+            self._add_button(
+                "Top balls" if self.top_kind == "players" else "Top players",
+                self._top_kind_toggle,
+                discord.ButtonStyle.secondary,
+                "🐾" if self.top_kind == "players" else "👥",
+                row=1,
+            )
             self._add_button("Quit", self._quit, discord.ButtonStyle.danger, "💔", row=1)
             return
         if self.focus:
-            self._add_button(None, self._prev_obj, discord.ButtonStyle.secondary, "◀️")
-            self._add_button("Back to list", self._back, discord.ButtonStyle.primary, "↩️")
-            self._add_button(None, self._next_obj, discord.ButtonStyle.secondary, "▶️")
-            self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎")
-            self._add_button("Quit", self._quit, discord.ButtonStyle.danger, "💔")
-            self._add_settings(1)
+            self._add_button(None, self._prev_obj, discord.ButtonStyle.secondary, "◀️", row=0)
+            self._add_button("Back to list", self._back, self._pri(), "↩️", row=0)
+            self._add_button(None, self._next_obj, discord.ButtonStyle.secondary, "▶️", row=0)
+            self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=0)
+            self._add_button("Menu", self._open_menu, discord.ButtonStyle.secondary, "☰", row=0)
             return
 
         # Row 0: inspect dropdown (doubles as the suggestions picker)
@@ -1254,54 +1771,132 @@ class RarityView(discord.ui.View):
             select.callback = self._guard(self._select)
             self.add_item(select)
 
-        # Row 1: search / clear
-        self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=1)
+        # Row 1: navigation + search + menu (everything else lives in the menu)
         if self.entries:
+            no_prev = self.page <= 0
+            no_next = self.page >= self.total_pages - 1
+            self._add_button("Back", self._prev, self._pri(), "⬅️", row=1, disabled=no_prev)
             self._add_button(
-                SORT_LABELS[self.sort_mode], self._sort, discord.ButtonStyle.secondary, "↕️", row=1
+                f"{self.page + 1}/{self.total_pages}",
+                self._jump,
+                discord.ButtonStyle.secondary,
+                row=1,
+                disabled=self.total_pages <= 1,
             )
-        if self.total_pages > 1:
-            self._add_button("Jump to page", self._jump, discord.ButtonStyle.secondary, "🔢", row=1)
-        if self.entries:
-            self._add_button("Random", self._random, discord.ButtonStyle.secondary, "🎲", row=1)
+            self._add_button("Next", self._next, self._pri(), "➡️", row=1, disabled=no_next)
+        self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=1)
+        self._add_button("Menu", self._open_menu, discord.ButtonStyle.secondary, "☰", row=1)
+
+        # Row 2: only when needed
         if self.results_title:
-            self._add_button("Clear", self._clear, discord.ButtonStyle.secondary, "✖️", row=1)
-
-        # Row 2: navigation
-        no_prev = self.page <= 0
-        no_next = self.page >= self.total_pages - 1
-        self._add_button("≪", self._first, discord.ButtonStyle.secondary, row=2, disabled=no_prev)
-        self._add_button("Back", self._prev, discord.ButtonStyle.primary, "⬅️", row=2, disabled=no_prev)
-        self._add_button("Next", self._next, discord.ButtonStyle.primary, "➡️", row=2, disabled=no_next)
-        self._add_button("≫", self._last, discord.ButtonStyle.secondary, row=2, disabled=no_next)
-        self._add_button("Quit", self._quit, discord.ButtonStyle.danger, "💔", row=2)
-
-        # Row 3: tips toggle
-        self._add_settings(3)
-
-        # Row 4: the secret button (disappears once this user has used it)
+            self._add_button("Clear", self._clear, discord.ButtonStyle.secondary, "✖️", row=2)
+        # the secret button (disappears once this user has used it)
         if not self.claims.has(self.author.id):
-            self._add_button("·", self._secret, discord.ButtonStyle.secondary, row=4)
+            self._add_button("·", self._secret, discord.ButtonStyle.secondary, row=2)
 
-    def _add_font_picker(self):
+    def _add_menu(self):
+        inlist = not self.focus
+        opts: list[tuple[str, str, str, str]] = []  # value, label, description, emoji
+        if inlist and self.entries:
+            opts.append(("sort", SORT_LABELS[self.sort_mode], "Change the sort order", "↕️"))
+        if self.entries or self.all:
+            opts.append(("random", "Random", "Open a random object", "🎲"))
+        if inlist and self.total_pages > 1:
+            opts.append(("jump", "Jump to page", "Type a page number", "🔢"))
+            opts.append(("first", "First page", "Go to the rarest page", "⏮️"))
+            opts.append(("last", "Last page", "Go to the last page", "⏭️"))
+        if inlist and self.results_title:
+            opts.append(("clear", "Clear", "Back to the full list", "✖️"))
+        opts.append(("daily", "Object of the day", "Today's featured object", "🌟"))
+        opts.append(("top", "Top catches", "Most caught balls and top players", "🏆"))
+        opts.append(("stats", "Dex stats", "Averages and a rarity chart", "📊"))
+        opts.append(("font", f"Font: {self.st.label_name}", f"Pick from {len(FONTS) - 1} fonts", "🔤"))
+        opts.append(("theme", f"Theme: {self.th.name}", f"Pick from {len(THEMES)} decoration styles", "🎨"))
+        if inlist:
+            opts.append(("layout", f"Layout: {LAYOUTS[self.layout][0]}", f"Pick from {len(LAYOUTS)} layouts", "🤔"))
+        if self.has_zero:
+            opts.append(
+                ("hide", f"Hide 0.0: {'On' if self.hide_zero else 'Off'}", "Hide objects with rarity 0.0 or lower", "😂")
+            )
+        opts.append(("tips", f"Tips: {'On' if self.tips_playing else 'Off'}", "Rotating tips in the footer", "💡"))
+        opts.append(("quit", "Quit", "Close this menu for good", "💔"))
         select = discord.ui.Select(
-            placeholder=self.st.label("Choose a font"),
+            placeholder=self.st.label("Pick an action"),
             options=[
-                discord.SelectOption(
-                    label=f.label_name,
-                    value=key,
-                    description=short(f.obj("The Codex Archives"), 100),
-                    default=(key == self.font),
-                )
-                for key, f in FONTS.items()
+                discord.SelectOption(label=label, value=value, description=desc, emoji=emoji)
+                for value, label, desc, emoji in opts
             ],
             row=0,
         )
-        select.callback = self._guard(self._pick_font)
+        select.callback = self._guard(self._menu_pick)
         self.add_item(select)
-        self._add_button(None, self._font_prev, discord.ButtonStyle.secondary, "◀️", row=1)
-        self._add_button("Done", self._font_done, discord.ButtonStyle.success, "✅", row=1)
-        self._add_button(None, self._font_next, discord.ButtonStyle.secondary, "▶️", row=1)
+        self._add_button("Close menu", self._close_menu, self._pri(), "↩️", row=1)
+
+    async def _open_menu(self, interaction: discord.Interaction):
+        self.menu = True
+        await self.update(interaction)
+
+    async def _close_menu(self, interaction: discord.Interaction):
+        self.menu = False
+        await self.update(interaction)
+
+    async def _menu_pick(self, interaction: discord.Interaction):
+        choice = interaction.data["values"][0]  # type: ignore
+        self.menu = False
+        handler = {
+            "sort": self._sort,
+            "random": self._random,
+            "jump": self._jump,
+            "first": self._first,
+            "last": self._last,
+            "clear": self._clear,
+            "top": self._top_open,
+            "daily": self._daily_open,
+            "stats": self._open_stats,
+            "theme": self._theme_open,
+            "font": self._font,
+            "layout": self._layout,
+            "hide": self._hide_zero,
+            "tips": self._tips,
+            "quit": self._quit,
+        }.get(choice)
+        if handler:
+            await handler(interaction)
+        else:
+            await self.update(interaction)
+
+    async def _top_select(self, interaction: discord.Interaction):
+        period = interaction.data["values"][0]  # type: ignore
+        await interaction.response.defer()
+        await self._load_top(period if period in PERIODS else "day")
+        await self.update(interaction)
+
+    def _add_font_picker(self):
+        keys = list(FONTS)
+        chunks = math.ceil(len(keys) / 25)  # a dropdown holds at most 25 choices
+        size = math.ceil(len(keys) / chunks)
+        for c in range(chunks):
+            part = keys[c * size : (c + 1) * size]
+            select = discord.ui.Select(
+                placeholder=self.st.label(
+                    "Choose a font" if chunks == 1 else f"Choose a font · {c * size + 1}–{c * size + len(part)}"
+                ),
+                options=[
+                    discord.SelectOption(
+                        label=FONTS[key].label_name,
+                        value=key,
+                        description=short(FONTS[key].obj("The Codex Archives"), 100),
+                        default=(key == self.font),
+                    )
+                    for key in part
+                ],
+                row=c,
+            )
+            select.callback = self._guard(self._pick_font)
+            self.add_item(select)
+        self._add_button(None, self._font_prev, discord.ButtonStyle.secondary, "◀️", row=chunks)
+        self._add_button("Done", self._font_done, discord.ButtonStyle.success, "✅", row=chunks)
+        self._add_button(None, self._font_next, discord.ButtonStyle.secondary, "▶️", row=chunks)
 
     def _add_layout_picker(self):
         select = discord.ui.Select(
@@ -1319,6 +1914,23 @@ class RarityView(discord.ui.View):
         self._add_button(None, self._layout_prev, discord.ButtonStyle.secondary, "◀️", row=1)
         self._add_button("Done", self._font_done, discord.ButtonStyle.success, "✅", row=1)
         self._add_button(None, self._layout_next, discord.ButtonStyle.secondary, "▶️", row=1)
+
+    def _add_theme_picker(self):
+        select = discord.ui.Select(
+            placeholder=self.st.label("Choose a theme"),
+            options=[
+                discord.SelectOption(
+                    label=t.name, value=key, description=short(t.divider, 100), default=(key == self.theme)
+                )
+                for key, t in THEMES.items()
+            ],
+            row=0,
+        )
+        select.callback = self._guard(self._pick_theme)
+        self.add_item(select)
+        self._add_button(None, self._theme_prev, discord.ButtonStyle.secondary, "◀️", row=1)
+        self._add_button("Done", self._font_done, discord.ButtonStyle.success, "✅", row=1)
+        self._add_button(None, self._theme_next, discord.ButtonStyle.secondary, "▶️", row=1)
 
     def _add_settings(self, row: int):
         self._add_tips_button(row)
@@ -1479,10 +2091,52 @@ class RarityView(discord.ui.View):
     async def _layout_next(self, interaction: discord.Interaction):
         await self._layout_step(interaction, 1)
 
+    async def _theme_open(self, interaction: discord.Interaction):
+        self.picking = "theme"
+        await self.update(interaction)
+
+    def _set_theme(self, key: str):
+        if key in THEMES:
+            self.theme = key
+            self.prefs.set(self.author.id, "theme", key)
+
+    async def _pick_theme(self, interaction: discord.Interaction):
+        self._set_theme(interaction.data["values"][0])  # type: ignore
+        await self.update(interaction)
+
+    async def _theme_step(self, interaction: discord.Interaction, delta: int):
+        keys = list(THEMES)
+        self._set_theme(keys[(keys.index(self.theme) + delta) % len(keys)])
+        await self.update(interaction)
+
+    async def _theme_prev(self, interaction: discord.Interaction):
+        await self._theme_step(interaction, -1)
+
+    async def _theme_next(self, interaction: discord.Interaction):
+        await self._theme_step(interaction, 1)
+
+    async def _open_stats(self, interaction: discord.Interaction):
+        self.stats_open = True
+        await self.update(interaction)
+
+    async def _close_stats(self, interaction: discord.Interaction):
+        self.stats_open = False
+        await self.update(interaction)
+
+    async def _daily_open(self, interaction: discord.Interaction):
+        daily = self.daily
+        if daily and daily.id in self.rank:
+            self.focus = daily
+        await self.update(interaction)
+
     # ----- most caught
     async def _load_top(self, period: str):
+        self.stats_open = False
         self.top_period = period
         try:
+            if self.top_kind == "players":
+                self.top_players, self.top_method = await top_catchers(period)
+                return
             rows = []
             for ball_id, total in await top_catches(period):
                 e = self.by_id.get(ball_id)
@@ -1492,7 +2146,16 @@ class RarityView(discord.ui.View):
             self.top_rows = rows[:10]
         except Exception:
             log.exception("Most-caught lookup failed")
-            self.top_rows = None
+            if self.top_kind == "players":
+                self.top_players = None
+            else:
+                self.top_rows = None
+
+    async def _top_kind_toggle(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        self.top_kind = "players" if self.top_kind == "balls" else "balls"
+        await self._load_top(self.top_period or "day")
+        await self.update(interaction)
 
     def _period_cb(self, period: str):
         async def callback(interaction: discord.Interaction):
@@ -1641,7 +2304,7 @@ class Rarity(commands.Cog):
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
         self.claims = ClaimStore()
-        self.phrase_claims = ClaimStore(PHRASE_CLAIMS_FILE)
+        self.phrase_claims = UseStore(PHRASE_USES_FILE, SECRET_PHRASE_USES)
         self.prefs = PrefStore()
         self.active: weakref.WeakValueDictionary[int, RarityView] = weakref.WeakValueDictionary()
 
