@@ -49,6 +49,7 @@ TITLE = "The Codex Archives"
 TIMEOUT = 600  # seconds of inactivity before the menu locks (keep under 15 min)
 TIP_INTERVAL = 10  # seconds between tip changes
 CLICK_COOLDOWN = 0.6  # clicks faster than this are ignored (stops button spam)
+BUTTON_COOLDOWN = 1.5  # the same button (or dropdown) can't be used again within this many seconds
 CACHE_SECONDS = 30  # how long the object list is reused between commands
 
 RARITY_MIN = 1.0  # rarest value on this bot
@@ -1178,6 +1179,7 @@ class RarityView(discord.ui.View):
         self._busy = False  # a click is being handled right now: ignore the rest
         self._last_defer = 0.0
         self._last_slow = 0.0
+        self._button_at: dict[str, float] = {}  # when each button was last used
         self._stranger_at = 0.0
         self._ticker: asyncio.Task | None = None
         self.refresh()
@@ -1741,7 +1743,7 @@ class RarityView(discord.ui.View):
             for i, (did, n) in enumerate(rows[1:], 2):
                 lines.append(f"**#{i}** {who(did)} · `{n}` `{self.sbar(n, count)}`")
             lines.append(
-                "-# ✓ counts catches even if the balls were traded away"
+                "-# hi verity"
                 if self.top_method in ("original", "history")
                 else "-# merry christmas"
             )
@@ -2295,6 +2297,14 @@ class RarityView(discord.ui.View):
         await interaction.delete_original_response()
 
     # ----- lifecycle
+    def _button_key(self, interaction: discord.Interaction) -> str | None:
+        """Which button was pressed. Buttons get new ids whenever the menu redraws, so go by what they look like."""
+        cid = (getattr(interaction, "data", None) or {}).get("custom_id")
+        for item in self.children:
+            if cid is not None and getattr(item, "custom_id", None) == cid:
+                return f"{getattr(item, 'label', None)}|{getattr(item, 'emoji', None)}|{getattr(item, 'placeholder', None)}"
+        return None
+
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         try:
             now = time.monotonic()
@@ -2307,11 +2317,17 @@ class RarityView(discord.ui.View):
                         pass
                 return False
             # busy (a click is still being handled; 10s = safety net) or too fast: ignore it, but answer it
-            if (self._busy and now - self._last_action < 10) or now - self._last_action < CLICK_COOLDOWN:
+            key = self._button_key(interaction)
+            same_button_too_soon = key is not None and now - self._button_at.get(key, 0.0) < BUTTON_COOLDOWN
+            if (
+                (self._busy and now - self._last_action < 10)
+                or now - self._last_action < CLICK_COOLDOWN
+                or same_button_too_soon
+            ):
                 try:
                     if now - self._last_slow > 6:
                         self._last_slow = now
-                        await interaction.response.send_message("Easy there, one click at a time.", ephemeral=True)
+                        await interaction.response.send_message("stop clicking so fucking fast", ephemeral=True)
                     elif now - self._last_defer > 0.25:
                         self._last_defer = now
                         await interaction.response.defer()
@@ -2320,6 +2336,10 @@ class RarityView(discord.ui.View):
                 return False
             self._busy = True
             self._last_action = now
+            if key is not None:
+                if len(self._button_at) > 60:
+                    self._button_at.clear()
+                self._button_at[key] = now
             return True
         except Exception:
             log.exception("Rarity click check failed")
@@ -2385,7 +2405,7 @@ class Rarity(commands.Cog):
         except Exception:
             log.exception("rarity command failed")
             try:
-                note = "Something broke on my end. Try again in a moment."
+                note = "Command failed, pls retry noob 😈😈😈😈😈😈😈"
                 if interaction.response.is_done():
                     await interaction.followup.send(note, ephemeral=True)
                 else:
