@@ -6,7 +6,7 @@ Please dont.
 
 ```
 [[ballsdex.packages]]
-location = "git+https://github.com/hikaboomers/new-verity.git@v1.8.0"
+location = "git+https://github.com/hikaboomers/new-verity.git@v1.9.0"
 path = "rarity"
 enabled = true
 ```
