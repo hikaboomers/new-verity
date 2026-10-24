@@ -50,6 +50,8 @@ TIMEOUT = 600  # seconds of inactivity before the menu locks (keep under 15 min)
 TIP_INTERVAL = 10  # seconds between tip changes
 CLICK_COOLDOWN = 0.6  # clicks faster than this are ignored (stops button spam)
 BUTTON_COOLDOWN = 1.5  # the same button (or dropdown) can't be used again within this many seconds
+SPAM_CLICKS = 10  # this many ignored clicks within 5 seconds = someone is spamming...
+SPAM_LOCK_SECONDS = 10  # ...so their buttons go silent for this long (no replies at all, so spam can't load the bot)
 CACHE_SECONDS = 30  # how long the object list is reused between commands
 
 RARITY_MIN = 1.0  # rarest value on this bot
@@ -79,6 +81,7 @@ SECRET_PHRASE_USES = 3  # how many times each person can use it
 SECRET_MIN_CATCH_SECONDS = 6.0  # secret objects show a catch time between these two numbers
 SECRET_MAX_CATCH_SECONDS = 10.0
 DB_TIMEOUT = 10.0  # seconds before a slow leaderboard lookup is given up on (keeps the bot from freezing)
+DB_STATEMENT_MS = 4000  # the database itself cancels a leaderboard query after this many milliseconds
 PHRASE_USES_FILE = Path(__file__).parent / "secret_phrase_uses.json"
 
 SECRET_BALL_ID: int | None = None  # None = random ball (weighted by rarity); or a fixed ball id
@@ -671,11 +674,41 @@ class PrefStore:
 _top_cache: dict[str, tuple[float, list[tuple[int, int]]]] = {}
 
 
+def _ttl(period: str) -> float:
+    """How long a leaderboard is kept. The bigger periods are slower to work out, so they are kept longer."""
+    return TOP_CACHE_SECONDS if period == "day" else TOP_CACHE_SECONDS * 5
+
+
+async def _run_limited(qs) -> list:
+    """Run a Django query with a time limit that the database itself enforces.
+
+    All of the bot's database work shares ONE thread, and giving up on a waiting task does not stop a query that is
+    already running. So one slow leaderboard query used to freeze every catch and spawn until it finished. With a
+    statement timeout, Postgres cancels it and the thread is free again.
+    """
+    from asgiref.sync import sync_to_async
+
+    def run():
+        from django.db import connection, transaction
+
+        if connection.vendor == "postgresql":
+            with transaction.atomic():
+                with connection.cursor() as cur:
+                    cur.execute(f"SET LOCAL statement_timeout = {int(DB_STATEMENT_MS)}")
+                return list(qs)
+        return list(qs)
+
+    return await sync_to_async(run)()
+
+
+_history_state = {"skip_until": 0.0}  # when the trade-history lookup fails it is not retried for a while
+
+
 async def _top_catches_raw(period: str, limit: int = 25) -> list[tuple[int, int]]:
     """[(ball id, times caught)] for the period, most caught first."""
     cached = _top_cache.get(period)
     now = time.monotonic()
-    if cached and now - cached[0] < TOP_CACHE_SECONDS:
+    if cached and now - cached[0] < _ttl(period):
         return cached[1]
     delta = PERIODS[period][1]
     since = datetime.now(timezone.utc) - delta if delta else None
@@ -686,7 +719,7 @@ async def _top_catches_raw(period: str, limit: int = 25) -> list[tuple[int, int]
         if since:
             qs = qs.filter(catch_date__gte=since)
         qs = qs.values("ball_id").annotate(total=Count("id")).order_by("-total")[:limit]
-        rows = [(r["ball_id"], r["total"]) async for r in qs]
+        rows = [(r["ball_id"], r["total"]) for r in await _run_limited(qs)]
     else:
         from tortoise.functions import Count
 
@@ -721,7 +754,7 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
     """
     cached = _catcher_cache.get(period)
     now = time.monotonic()
-    if cached and now - cached[0] < TOP_CACHE_SECONDS:
+    if cached and now - cached[0] < _ttl(period):
         return cached[1]
     delta = PERIODS[period][1]
     since = datetime.now(timezone.utc) - delta if delta else None
@@ -737,7 +770,7 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
             base = base.filter(catch_date__gte=since)
 
         async def collect(qs, key: str) -> list[tuple[int, int]]:
-            return [(r[key], r["total"]) async for r in qs if r[key] is not None]
+            return [(r[key], r["total"]) for r in await _run_limited(qs) if r[key] is not None]
 
         pairs, method = None, "owner"
         # 1) a stored "original catcher" column
@@ -753,7 +786,7 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
                 log.warning("rarity: original-catcher query failed", exc_info=True)
         # 2) the trade history: whoever gave the ball away first caught it
         trade_obj, trade = getattr(bdm, "TradeObject", None), getattr(bdm, "Trade", None)
-        if pairs is None and trade_obj and trade:
+        if pairs is None and trade_obj and trade and time.monotonic() >= _history_state["skip_until"]:
             date_field = next((f for f in ("date", "trade_date", "created_at") if _has_field(trade, f)), None)
             if date_field and all(_has_field(trade_obj, f) for f in ("ballinstance", "player", "trade")):
                 try:
@@ -773,7 +806,8 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
                     # a slow history lookup falls back to the quick one instead of failing the whole screen
                     pairs, method = await asyncio.wait_for(collect(qs, "catcher"), 6.0), "history"
                 except Exception:
-                    log.warning("rarity: trade-history catcher query failed", exc_info=True)
+                    _history_state["skip_until"] = time.monotonic() + 600  # too slow or broken: skip it for 10 minutes
+                    log.warning("rarity: trade-history catcher query failed, using current owners for 10 minutes", exc_info=True)
         # 3) current owner (traded-away balls count for whoever holds them now)
         if pairs is None:
             qs = base.values("player_id").annotate(total=Count("id")).order_by("-total")[:limit]
@@ -802,22 +836,43 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
 
 
 _top_locks: dict[str, asyncio.Lock] = {}
-_db_slots = asyncio.Semaphore(2)  # never more than two leaderboard queries hitting the database at once
+_db_slots = asyncio.Semaphore(1)  # the bot has one database thread anyway: one leaderboard query at a time
+_db_waiting = [0]
+_db_fail_until: dict[str, float] = {}
 
 
 async def _guarded_lookup(key: str, factory):
-    """One lookup per leaderboard at a time (the people waiting reuse its cached result), with a time limit."""
-    lock = _top_locks.setdefault(key, asyncio.Lock())
-    async with lock:
-        async with _db_slots:
-            return await asyncio.wait_for(factory(), DB_TIMEOUT)
+    """One leaderboard lookup at a time, with a time limit. Spamming it can't pile up work:
+    a lookup that just failed is not retried for 20 seconds, and only a few can wait in line."""
+    if time.monotonic() < _db_fail_until.get(key, 0.0):
+        raise asyncio.TimeoutError("leaderboard lookup failed a moment ago")
+    if _db_waiting[0] >= 6:
+        raise asyncio.TimeoutError("too many leaderboard lookups waiting")
+    _db_waiting[0] += 1
+    try:
+        lock = _top_locks.setdefault(key, asyncio.Lock())
+        async with lock:
+            async with _db_slots:
+                try:
+                    return await asyncio.wait_for(factory(), DB_TIMEOUT)
+                except Exception:
+                    _db_fail_until[key] = time.monotonic() + 20
+                    raise
+    finally:
+        _db_waiting[0] -= 1
 
 
 async def top_catches(period: str, limit: int = 25) -> list[tuple[int, int]]:
+    cached = _top_cache.get(period)
+    if cached and time.monotonic() - cached[0] < _ttl(period):
+        return cached[1]  # no waiting in line for something we already know
     return await _guarded_lookup(f"balls:{period}", lambda: _top_catches_raw(period, limit))
 
 
 async def top_catchers(period: str, limit: int = 10) -> tuple[list[tuple[int, int]], str]:
+    cached = _catcher_cache.get(period)
+    if cached and time.monotonic() - cached[0] < _ttl(period):
+        return cached[1]
     return await _guarded_lookup(f"players:{period}", lambda: _top_catchers_raw(period, limit))
 
 
@@ -1180,6 +1235,8 @@ class RarityView(discord.ui.View):
         self._last_defer = 0.0
         self._last_slow = 0.0
         self._button_at: dict[str, float] = {}  # when each button was last used
+        self._ignored: list[float] = []  # times of recent ignored clicks
+        self._locked_until = 0.0  # spam lock: until then clicks get no reply at all
         self._stranger_at = 0.0
         self._ticker: asyncio.Task | None = None
         self.refresh()
@@ -2316,6 +2373,8 @@ class RarityView(discord.ui.View):
                     except (discord.HTTPException, discord.InteractionResponded):
                         pass
                 return False
+            if now < self._locked_until:
+                return False  # spam lock: no reply, so a spammer can't load the bot
             # busy (a click is still being handled; 10s = safety net) or too fast: ignore it, but answer it
             key = self._button_key(interaction)
             same_button_too_soon = key is not None and now - self._button_at.get(key, 0.0) < BUTTON_COOLDOWN
@@ -2324,11 +2383,18 @@ class RarityView(discord.ui.View):
                 or now - self._last_action < CLICK_COOLDOWN
                 or same_button_too_soon
             ):
+                self._ignored = [t for t in self._ignored if now - t < 5] + [now]
                 try:
-                    if now - self._last_slow > 6:
+                    if len(self._ignored) >= SPAM_CLICKS:
+                        self._ignored.clear()
+                        self._locked_until = now + SPAM_LOCK_SECONDS
+                        await interaction.response.send_message(
+                            f"Dude stop clicking so fast, The buttons are locked for {SPAM_LOCK_SECONDS} seconds now.", ephemeral=True
+                        )
+                    elif now - self._last_slow > 6:
                         self._last_slow = now
-                        await interaction.response.send_message("stop clicking so fucking fast", ephemeral=True)
-                    elif now - self._last_defer > 0.25:
+                        await interaction.response.send_message("Slow down dude", ephemeral=True)
+                    elif now - self._last_defer > 0.75:
                         self._last_defer = now
                         await interaction.response.defer()
                 except (discord.HTTPException, discord.InteractionResponded):
@@ -2405,7 +2471,7 @@ class Rarity(commands.Cog):
         except Exception:
             log.exception("rarity command failed")
             try:
-                note = "Command failed, pls retry noob 😈😈😈😈😈😈😈"
+                note = "Retry the command"
                 if interaction.response.is_done():
                     await interaction.followup.send(note, ephemeral=True)
                 else:
