@@ -10,6 +10,7 @@ import math
 import os
 import re
 import random
+import tempfile
 import time
 import weakref
 from dataclasses import dataclass
@@ -40,6 +41,66 @@ except ImportError:  # pragma: no cover
 
 
 log = logging.getLogger(__name__)
+
+
+def _protect_view_store():
+    """Stop a click on an old, already replaced button from crashing the whole bot.
+
+    Every time the menu redraws, its buttons are replaced. discord.py still remembers the old ones, and if somebody
+    clicks one of them before their screen updates (easy to do when spamming), discord.py hits a button that no longer
+    belongs to a view and raises an error inside its own gateway code. Nothing in this cog can catch that, and the bot
+    shuts down ("'NoneType' object has no attribute '_dispatch_item'"). This makes it ignore such a click instead.
+    """
+    try:
+        from discord.ui.view import ViewStore
+    except Exception:
+        log.warning("rarity: could not protect discord.py's button handling", exc_info=True)
+        return
+    original = ViewStore.dispatch_view
+    if getattr(original, "_rarity_safe", False):
+        return
+
+    def dispatch_view(self, component_type, custom_id, interaction):
+        try:
+            return original(self, component_type, custom_id, interaction)
+        except AttributeError as exc:
+            if "_dispatch_item" not in str(exc):
+                raise
+            log.debug("rarity: ignored a click on a button that was already replaced")
+
+    dispatch_view._rarity_safe = True  # type: ignore[attr-defined]
+    ViewStore.dispatch_view = dispatch_view  # type: ignore[method-assign]
+
+
+_protect_view_store()
+
+
+def _pick_data_dir() -> Path:
+    """A folder this bot is allowed to write to. The package folder is read-only when the cog is installed with pip."""
+    candidates = []
+    if os.environ.get("RARITY_DATA_DIR"):
+        candidates.append(Path(os.environ["RARITY_DATA_DIR"]))
+    candidates += [
+        Path("/code/config"),  # BallsDex's config folder: it lives on your own computer, so it survives rebuilds
+        Path(__file__).parent,
+        Path.cwd(),
+        Path("/data"),
+        Path(tempfile.gettempdir()) / "rarity",
+    ]
+    for folder in candidates:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            probe = folder / ".rarity_write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+            return folder
+        except OSError:
+            continue
+    return Path(__file__).parent
+
+
+DATA_DIR = _pick_data_dir()
+log.info("rarity: saving its data in %s (set RARITY_DATA_DIR to choose another folder)", DATA_DIR)
 
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
@@ -82,14 +143,14 @@ SECRET_MIN_CATCH_SECONDS = 6.0  # secret objects show a catch time between these
 SECRET_MAX_CATCH_SECONDS = 10.0
 DB_TIMEOUT = 10.0  # seconds before a slow leaderboard lookup is given up on (keeps the bot from freezing)
 DB_STATEMENT_MS = 4000  # the database itself cancels a leaderboard query after this many milliseconds
-PHRASE_USES_FILE = Path(__file__).parent / "secret_phrase_uses.json"
+PHRASE_USES_FILE = DATA_DIR / "secret_phrase_uses.json"
 
 SECRET_BALL_ID: int | None = None  # None = random ball (weighted by rarity); or a fixed ball id
-CLAIMS_FILE = Path(__file__).parent / "secret_claims.json"  # who already used the secret button
+CLAIMS_FILE = DATA_DIR / "secret_claims.json"  # who already used the secret button
 
 FONT_DEFAULT = "default"  # default font for new users: default / coolvetica / vcr / fe / off
 HIDE_ZERO_DEFAULT = False  # True = hide objects with rarity 0.0 or lower until the user shows them
-PREFS_FILE = Path(__file__).parent / "rarity_prefs.json"  # remembers each user's font + hide choice
+PREFS_FILE = DATA_DIR / "rarity_prefs.json"  # remembers each user's font + hide choice
 
 LAYOUT_DEFAULT = "cards"
 # name -> (label, objects per page, short description shown in the layout picker)
@@ -1883,7 +1944,7 @@ class RarityView(discord.ui.View):
         ability_desc = e.description or "THe fuck? Wheres the ability desc Melody???"
         embed.add_field(
             name="\u200b",
-            value=f"### ✨ {short(ability_name, 200)}\n>>> {short(ability_desc, 900)}",
+            value=f"### ✨ {short(ability_name, 150)}\n>>> {short(ability_desc, 800)}",
             inline=False,
         )
         if e.emoji:
@@ -2389,11 +2450,11 @@ class RarityView(discord.ui.View):
                         self._ignored.clear()
                         self._locked_until = now + SPAM_LOCK_SECONDS
                         await interaction.response.send_message(
-                            f"Dude stop clicking so fast, The buttons are locked for {SPAM_LOCK_SECONDS} seconds now.", ephemeral=True
+                            f"Is that a another verity? Two correct! {SPAM_LOCK_SECONDS}", ephemeral=True
                         )
                     elif now - self._last_slow > 6:
                         self._last_slow = now
-                        await interaction.response.send_message("Slow down dude", ephemeral=True)
+                        await interaction.response.send_message("Is that a verity, one correct!", ephemeral=True)
                     elif now - self._last_defer > 0.75:
                         self._last_defer = now
                         await interaction.response.defer()
@@ -2408,12 +2469,12 @@ class RarityView(discord.ui.View):
                 self._button_at[key] = now
             return True
         except Exception:
-            log.exception("Rarity click check failed")
+            log.exception("Verity click check failed")
             self._busy = False
             return False
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
-        log.exception("Error in rarity menu", exc_info=error)
+        log.exception("Error in verity menu", exc_info=error)
 
     async def close(self):
         """Shut this rarity list down (used when the same user opens a new one)."""
@@ -2471,7 +2532,7 @@ class Rarity(commands.Cog):
         except Exception:
             log.exception("rarity command failed")
             try:
-                note = "Retry the command"
+                note = "pls try again"
                 if interaction.response.is_done():
                     await interaction.followup.send(note, ephemeral=True)
                 else:
