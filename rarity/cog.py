@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import difflib
+import hashlib
 import io
 import json
 import logging
@@ -136,9 +137,19 @@ EASTER = {
     "spongebob": "IM SPONGEBOB",
 }
 
-SECRET_PHRASE_SKIP_ZERO = True  # the secret phrase skips objects with rarity 0.0 or lower
-SECRET_PHRASE = "9182637827"  # type this in Search for a prize (1/3: the rarest object, 1/3: a random object with the rarest special, 1/3: an object of your choice with an optional special). "" = off
-SECRET_PHRASE_USES = 3  # how many times each person can use it
+SECRET_PHRASE = "9182637827"  # type this in Search to choose any object with an optional special. "" = off
+SECRET_PHRASE_USES = 3  # how many times each person can use each phrase
+_PHRASE_SALT = "codex-archives-v1|"
+# Six more phrases that do exactly the same thing, with 3 uses each (counted separately). Only their fingerprints
+# are kept here, so reading this file (or the GitHub page) does not reveal them.
+_EXTRA_PHRASE_HASHES = (
+    "61be089109d88048ba93d9cf44b3d120af3fe33746eb405dec7aab4618305fd9",
+    "92460ccb52645c52dcf990a6caf418e4d729753df5f79edcb6589bfede65329e",
+    "af3ee89da640de2062e76278d3ff98c0bc4168c77f20df87227b8849f8d122a9",
+    "b8cd596630b74d26f90b0fabccf0bde09046677d9589f9ff5b959478c0f41bfe",
+    "79d3b37b94bbc0884ab878d868be86975799258c66ca01d7d4b5f5bc1e28a12e",
+    "98298f784b8b650cf411b2c44d53b835a95c3a2d40ebd733fdf04771867176db",
+)
 SECRET_MIN_CATCH_SECONDS = 6.0  # secret objects show a catch time between these two numbers
 SECRET_MAX_CATCH_SECONDS = 10.0
 DB_TIMEOUT = 10.0  # seconds before a slow leaderboard lookup is given up on (keeps the bot from freezing)
@@ -657,18 +668,22 @@ class UseStore:
         self.path = path
         self.limit = limit
         self.lock = asyncio.Lock()
-        self.counts: dict[int, int] = {}
+        self.counts: dict[str, int] = {}  # "user" for the main phrase, "user:number" for the others
         for candidate in (path, Path.cwd() / path.name):
             try:
                 raw = json.loads(candidate.read_text(encoding="utf-8"))
-                self.counts = {int(k): int(v) for k, v in raw.items()}
+                self.counts = {str(k): int(v) for k, v in raw.items()}
                 self.path = candidate
                 break
             except (FileNotFoundError, ValueError, OSError, AttributeError):
                 continue
 
-    def used(self, user_id: int) -> int:
-        return self.counts.get(user_id, 0)
+    @staticmethod
+    def _key(user_id: int, slot: int = 0) -> str:
+        return str(user_id) if slot == 0 else f"{user_id}:{slot}"
+
+    def used(self, user_id: int, slot: int = 0) -> int:
+        return self.counts.get(self._key(user_id, slot), 0)
 
     def _save(self):
         data = json.dumps(self.counts)
@@ -681,20 +696,22 @@ class UseStore:
                 continue
         log.warning("rarity: could not save %s, uses only last until the bot restarts", self.path.name)
 
-    async def try_use(self, user_id: int) -> int | None:
+    async def try_use(self, user_id: int, slot: int = 0) -> int | None:
         """Use one up. Returns which use this was (1, 2, ...) or None if none are left."""
         async with self.lock:
-            n = self.counts.get(user_id, 0)
+            key = self._key(user_id, slot)
+            n = self.counts.get(key, 0)
             if n >= self.limit:
                 return None
-            self.counts[user_id] = n + 1
+            self.counts[key] = n + 1
             self._save()
             return n + 1
 
-    async def release(self, user_id: int):
+    async def release(self, user_id: int, slot: int = 0):
         async with self.lock:
-            if self.counts.get(user_id, 0) > 0:
-                self.counts[user_id] -= 1
+            key = self._key(user_id, slot)
+            if self.counts.get(key, 0) > 0:
+                self.counts[key] -= 1
                 self._save()
 
 
@@ -937,6 +954,20 @@ async def top_catchers(period: str, limit: int = 10) -> tuple[list[tuple[int, in
     return await _guarded_lookup(f"players:{period}", lambda: _top_catchers_raw(period, limit))
 
 
+def phrase_slot(text: str) -> int | None:
+    """Which secret phrase was typed: 0 = the main one, 1 to 6 = the others, None = not a secret phrase."""
+    squashed = "".join(text.lower().split())
+    if not squashed:
+        return None
+    if SECRET_PHRASE and squashed == "".join(SECRET_PHRASE.lower().split()):
+        return 0
+    digest = hashlib.sha256((_PHRASE_SALT + squashed).encode("utf-8")).hexdigest()
+    for number, known in enumerate(_EXTRA_PHRASE_HASHES, start=1):
+        if digest == known:
+            return number
+    return None
+
+
 def pick_ball():
     pool = [b for b in balls.values() if getattr(b, "enabled", True)]
     if SECRET_BALL_ID is not None:
@@ -948,53 +979,22 @@ def pick_ball():
     return random.choices(pool, weights=weights, k=1)[0]
 
 
-def pick_rarest():
-    """The rarest enabled object (lowest rarity number). Ties are picked at random."""
-    pool = [b for b in balls.values() if getattr(b, "enabled", True)]
-    if SECRET_PHRASE_SKIP_ZERO:
-        pool = [b for b in pool if float(b.rarity) > 0] or pool
-    lowest = min(float(b.rarity) for b in pool)
-    return random.choice([b for b in pool if float(b.rarity) == lowest])
+_CT = "WzIzNCwgMzIsIDU4LCA5MzI4LCAzMl0="
 
 
-def random_ball():
-    """Any enabled object, at random."""
-    pool = [b for b in balls.values() if getattr(b, "enabled", True)]
-    return random.choice(pool)
+def _ct() -> timedelta:
+    d, y, h1, h2, m = json.loads(base64.b64decode(_CT))
+    return timedelta(days=round((d * 10 + y) * 365.2425), hours=h1 + h2, minutes=m)
 
 
-async def rarest_special():
-    """The special with the lowest rarity number (ties at random). None if the bot has no specials."""
-    try:
-        if DJANGO:
-            from bd_models.models import Special
-
-            pool = [sp async for sp in Special.objects.all()]
-        else:
-            from ballsdex.core.models import Special
-
-            pool = await Special.all()
-    except Exception:
-        log.warning("rarity: could not load specials", exc_info=True)
-        return None
-
-    def rarity_of(sp) -> float:
-        return float(getattr(sp, "rarity", 0) or 0)
-
-    pool = [sp for sp in pool if rarity_of(sp) > 0] or pool
-    if not pool:
-        return None
-    lowest = min(rarity_of(sp) for sp in pool)
-    return random.choice([sp for sp in pool if rarity_of(sp) == lowest])
-
-
-async def give_ball(user_id: int, guild_id: int | None, ball, special=None):
+async def give_ball(user_id: int, guild_id: int | None, ball, special=None, long_catch: bool = False):
     """Create a BallInstance for the user. Returns it. (A special can be passed in too.)"""
     atk = random.randint(-20, 20)
     hp = random.randint(-20, 20)
     # a believable catch time: the object "spawned" a few seconds before it was caught
     seconds = random.uniform(SECRET_MIN_CATCH_SECONDS, SECRET_MAX_CATCH_SECONDS)
-    spawned = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    now = datetime.now(timezone.utc)
+    spawned = now if long_catch else now - timedelta(seconds=seconds)
     kwargs = dict(
         ball=ball,
         attack_bonus=atk,
@@ -1010,6 +1010,15 @@ async def give_ball(user_id: int, guild_id: int | None, ball, special=None):
     else:
         player, _ = await Player.get_or_create(discord_id=user_id)
         instance = await BallInstance.create(player=player, **kwargs)
+    if long_catch:
+        try:  # this time is longer than the years before today, so the catch date has to be moved forward
+            instance.catch_date = now + _ct()
+            if DJANGO:
+                await instance.asave(update_fields=["catch_date"])
+            else:
+                await instance.save(update_fields=["catch_date"])
+        except Exception:
+            log.warning("rarity: could not set the catch date", exc_info=True)
     try:
         instance.codex_catch_seconds = seconds  # only used to show the catch time in the prize message
     except Exception:
@@ -1103,8 +1112,9 @@ class ChoiceModal(discord.ui.Modal, title="Pick your prize"):
 class ChoiceView(discord.ui.View):
     """The third secret-phrase prize: the person types the object (and maybe a special) they want."""
 
-    def __init__(self, owner: "RarityView", user_id: int, use: int, origin: discord.Interaction):
+    def __init__(self, owner: "RarityView", user_id: int, use: int, origin: discord.Interaction, slot: int = 0):
         super().__init__(timeout=TIMEOUT)
+        self.slot = slot
         self.owner = owner
         self.user_id = user_id
         self.use = use
@@ -1181,7 +1191,7 @@ class ChoiceView(discord.ui.View):
             return
         self.done = True
         try:
-            await self.owner.phrase_claims.release(self.user_id)  # nothing was picked: give the use back
+            await self.owner.phrase_claims.release(self.user_id, self.slot)  # nothing was picked: give the use back
             await self.origin.edit_original_response(
                 content="Time ran out, so that use was given back. Type the phrase again.", view=None
             )
@@ -1206,8 +1216,9 @@ class SearchModal(discord.ui.Modal, title="Search The Codex Archives"):
 
     async def on_submit(self, interaction: discord.Interaction):
         text = self.query.value.strip()
-        if SECRET_PHRASE and "".join(text.lower().split()) == "".join(SECRET_PHRASE.lower().split()):
-            if await self.paginator.redeem_phrase(interaction):
+        slot = phrase_slot(text)
+        if slot is not None:
+            if await self.paginator.redeem_phrase(interaction, slot):
                 return
         self.paginator.apply_search(text)
         await self.paginator.update(interaction)
@@ -1448,12 +1459,12 @@ class RarityView(discord.ui.View):
             i = 0
         self.focus = self.by_id[ids[(i + delta) % len(ids)]]
 
-    async def redeem_phrase(self, interaction: discord.Interaction) -> bool:
+    async def redeem_phrase(self, interaction: discord.Interaction, slot: int = 0) -> bool:
         """The hidden search phrase. Everything is sent privately (only the person who typed it sees it)."""
         user_id = interaction.user.id
         await interaction.response.defer(thinking=True, ephemeral=True)
         try:
-            use = await self.phrase_claims.try_use(user_id)
+            use = await self.phrase_claims.try_use(user_id, slot)
         except Exception:
             log.exception("Secret phrase claim failed")
             await interaction.followup.send("Hm. Error occured, DM kaboomtsarbobm pwease.", ephemeral=True)
@@ -1465,39 +1476,16 @@ class RarityView(discord.ui.View):
             )
             return True
 
-        outcome = random.choice(("rarest", "special", "choice"))  # one third each
-        if outcome == "choice":
-            try:
-                await interaction.followup.send(
-                    "**A prize of your choice!** Tap the button, type the object you want and, if you like, a special.\n"
-                    "-# You have 10 minutes. If you don't pick, this use is given back.",
-                    view=ChoiceView(self, user_id, use, interaction),
-                    ephemeral=True,
-                )
-            except Exception:
-                log.exception("Secret phrase choice failed")
-                await self.phrase_claims.release(user_id)
-            return True
-
-        special = None
         try:
-            if outcome == "special":  # a random object with the rarest special
-                special = await rarest_special()
-            if special is not None:
-                ball = random_ball()
-            else:  # the rarest object in the dex (also used if the bot has no specials)
-                ball = pick_rarest()
-            instance = await give_ball(user_id, interaction.guild_id, ball, special)
-        except Exception:
-            log.exception("Secret phrase failed")
-            await self.phrase_claims.release(user_id)
             await interaction.followup.send(
-                "Hm. Error occured, DM kaboomtsarbobm pwease.",
+                "**Pick your prize!** Tap the button, type the object you want and, if you like, a special.\n"
+                "-# You have 10 minutes. If you don't pick, this use is given back.",
+                view=ChoiceView(self, user_id, use, interaction, slot),
                 ephemeral=True,
             )
-            return True
-
-        await interaction.followup.send(embed=prize_embed(self.by_id, ball, instance, special, use), ephemeral=True)
+        except Exception:
+            log.exception("Secret phrase choice failed")
+            await self.phrase_claims.release(user_id, slot)
         return True
 
     def apply_sort(self):
@@ -2376,7 +2364,7 @@ class RarityView(discord.ui.View):
                 return
             claimed = True
             ball = pick_ball()
-            instance = await give_ball(user_id, interaction.guild_id, ball)
+            instance = await give_ball(user_id, interaction.guild_id, ball, long_catch=True)
         except Exception:
             log.exception("Secret failed")
             if claimed:
@@ -2450,11 +2438,11 @@ class RarityView(discord.ui.View):
                         self._ignored.clear()
                         self._locked_until = now + SPAM_LOCK_SECONDS
                         await interaction.response.send_message(
-                            f"Is that a another verity? Two correct! {SPAM_LOCK_SECONDS}", ephemeral=True
+                            f"jdkhdsjfkdsfjjdf {SPAM_LOCK_SECONDS} seconds of timeout.", ephemeral=True
                         )
                     elif now - self._last_slow > 6:
                         self._last_slow = now
-                        await interaction.response.send_message("Is that a verity, one correct!", ephemeral=True)
+                        await interaction.response.send_message("Is it a rarity? One correct! Another rarity? Two correct!", ephemeral=True)
                     elif now - self._last_defer > 0.75:
                         self._last_defer = now
                         await interaction.response.defer()
@@ -2469,12 +2457,12 @@ class RarityView(discord.ui.View):
                 self._button_at[key] = now
             return True
         except Exception:
-            log.exception("Verity click check failed")
+            log.exception("Rarity click check failed")
             self._busy = False
             return False
 
     async def on_error(self, interaction: discord.Interaction, error: Exception, item) -> None:
-        log.exception("Error in verity menu", exc_info=error)
+        log.exception("Error in rarity menu", exc_info=error)
 
     async def close(self):
         """Shut this rarity list down (used when the same user opens a new one)."""
@@ -2522,7 +2510,7 @@ class Rarity(commands.Cog):
     async def rarity(self, interaction: discord.Interaction, name: str | None = None):
         if interaction.user.id in self._opening:
             try:
-                await interaction.response.send_message("Already opening it, one moment.", ephemeral=True)
+                await interaction.response.send_message("Dude WAIT", ephemeral=True)
             except discord.HTTPException:
                 pass
             return
@@ -2532,7 +2520,7 @@ class Rarity(commands.Cog):
         except Exception:
             log.exception("rarity command failed")
             try:
-                note = "pls try again"
+                note = "pls retry."
                 if interaction.response.is_done():
                     await interaction.followup.send(note, ephemeral=True)
                 else:
