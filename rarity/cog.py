@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import difflib
-import hashlib
 import io
 import json
 import logging
@@ -23,19 +22,18 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# BallsDex changed where models live between versions; support both.
 try:
-    from bd_models.models import BallInstance, Player, balls  # newer (Django) versions
+    from bd_models.models import BallInstance, Player, balls
 
     DJANGO = True
-except ImportError:  # pragma: no cover
-    from ballsdex.core.models import BallInstance, Player, balls  # older (Tortoise) versions
+except ImportError:
+    from ballsdex.core.models import BallInstance, Player, balls
 
     DJANGO = False
 
 try:
     from bd_models.models import transform_media
-except ImportError:  # pragma: no cover
+except ImportError:
 
     def transform_media(path: str) -> str:
         return path
@@ -45,13 +43,6 @@ log = logging.getLogger(__name__)
 
 
 def _protect_view_store():
-    """Stop a click on an old, already replaced button from crashing the whole bot.
-
-    Every time the menu redraws, its buttons are replaced. discord.py still remembers the old ones, and if somebody
-    clicks one of them before their screen updates (easy to do when spamming), discord.py hits a button that no longer
-    belongs to a view and raises an error inside its own gateway code. Nothing in this cog can catch that, and the bot
-    shuts down ("'NoneType' object has no attribute '_dispatch_item'"). This makes it ignore such a click instead.
-    """
     try:
         from discord.ui.view import ViewStore
     except Exception:
@@ -69,20 +60,19 @@ def _protect_view_store():
                 raise
             log.debug("rarity: ignored a click on a button that was already replaced")
 
-    dispatch_view._rarity_safe = True  # type: ignore[attr-defined]
-    ViewStore.dispatch_view = dispatch_view  # type: ignore[method-assign]
+    dispatch_view._rarity_safe = True
+    ViewStore.dispatch_view = dispatch_view
 
 
 _protect_view_store()
 
 
 def _pick_data_dir() -> Path:
-    """A folder this bot is allowed to write to. The package folder is read-only when the cog is installed with pip."""
     candidates = []
     if os.environ.get("RARITY_DATA_DIR"):
         candidates.append(Path(os.environ["RARITY_DATA_DIR"]))
     candidates += [
-        Path("/code/config"),  # BallsDex's config folder: it lives on your own computer, so it survives rebuilds
+        Path("/code/config"),
         Path(__file__).parent,
         Path.cwd(),
         Path("/data"),
@@ -106,29 +96,24 @@ log.info("rarity: saving its data in %s (set RARITY_DATA_DIR to choose another f
 if TYPE_CHECKING:
     from ballsdex.core.bot import BallsDexBot
 
-# ---------------- CONFIG ----------------
 TITLE = "The Codex Archives"
-TIMEOUT = 600  # seconds of inactivity before the menu locks (keep under 15 min)
-TIP_INTERVAL = 10  # seconds between tip changes
-CLICK_COOLDOWN = 0.6  # clicks faster than this are ignored (stops button spam)
-BUTTON_COOLDOWN = 1.5  # the same button (or dropdown) can't be used again within this many seconds
-SPAM_CLICKS = 10  # this many ignored clicks within 5 seconds = someone is spamming...
-SPAM_LOCK_SECONDS = 10  # ...so their buttons go silent for this long (no replies at all, so spam can't load the bot)
-CACHE_SECONDS = 30  # how long the object list is reused between commands
+TIMEOUT = 600
+TIP_INTERVAL = 10
+CLICK_COOLDOWN = 0.6
+BUTTON_COOLDOWN = 1.5
+SPAM_CLICKS = 10
+SPAM_LOCK_SECONDS = 10
+CACHE_SECONDS = 30
 
-RARITY_MIN = 1.0  # rarest value on this bot
-RARITY_MAX = 100.0  # most common value on this bot
-# Where your bot serves /media/ (e.g. "https://admin.example.com"). Empty = NO card link is shown.
-# You can also set it without editing this file: environment variable RARITY_CARD_URL_BASE
+RARITY_MIN = 1.0
+RARITY_MAX = 100.0
 CARD_URL_BASE = os.environ.get("RARITY_CARD_URL_BASE", "")
-TIPS_AUTOPLAY = True  # False = tips start paused and the Tips button "plays" them
+TIPS_AUTOPLAY = True
 DIVIDER = "✦━━━━━━━━━❖━━━━━━━━━✦"
-# colour stops from the rarest page to the most common page (r, g, b)
 GRADIENT = [(255, 193, 7), (255, 112, 67), (236, 64, 122), (126, 87, 194), (66, 133, 244), (149, 165, 166)]
-SPECTRUM = ["🟨", "🟧", "🟧", "🟥", "🟥", "🟪", "🟪", "🟦", "🟦", "⬜"]  # same fade, as a strip
+SPECTRUM = ["🟨", "🟧", "🟧", "🟥", "🟥", "🟪", "🟪", "🟦", "🟦", "⬜"]
 SORT_LABELS = ["Sort: Default", "Sort: Most common", "Sort: A–Z"]
 
-# type one of these in Search and the reply shows under the results
 EASTER = {
     "verity": "ask me anything",
     "nintendo": "nintendo is epic",
@@ -137,34 +122,14 @@ EASTER = {
     "spongebob": "IM SPONGEBOB",
 }
 
-SECRET_PHRASE = "9182637827"  # type this in Search to choose any object with an optional special. "" = off
-SECRET_PHRASE_USES = 3  # how many times each person can use each phrase
-_PHRASE_SALT = "codex-archives-v1|"
-# Six more phrases that do exactly the same thing, with 3 uses each (counted separately). Only their fingerprints
-# are kept here, so reading this file (or the GitHub page) does not reveal them.
-_EXTRA_PHRASE_HASHES = (
-    "61be089109d88048ba93d9cf44b3d120af3fe33746eb405dec7aab4618305fd9",
-    "92460ccb52645c52dcf990a6caf418e4d729753df5f79edcb6589bfede65329e",
-    "af3ee89da640de2062e76278d3ff98c0bc4168c77f20df87227b8849f8d122a9",
-    "b8cd596630b74d26f90b0fabccf0bde09046677d9589f9ff5b959478c0f41bfe",
-    "79d3b37b94bbc0884ab878d868be86975799258c66ca01d7d4b5f5bc1e28a12e",
-    "98298f784b8b650cf411b2c44d53b835a95c3a2d40ebd733fdf04771867176db",
-)
-SECRET_MIN_CATCH_SECONDS = 6.0  # secret objects show a catch time between these two numbers
-SECRET_MAX_CATCH_SECONDS = 10.0
-DB_TIMEOUT = 10.0  # seconds before a slow leaderboard lookup is given up on (keeps the bot from freezing)
-DB_STATEMENT_MS = 4000  # the database itself cancels a leaderboard query after this many milliseconds
-PHRASE_USES_FILE = DATA_DIR / "secret_phrase_uses.json"
+DB_TIMEOUT = 10.0
+DB_STATEMENT_MS = 4000
 
-SECRET_BALL_ID: int | None = None  # None = random ball (weighted by rarity); or a fixed ball id
-CLAIMS_FILE = DATA_DIR / "secret_claims.json"  # who already used the secret button
-
-FONT_DEFAULT = "default"  # default font for new users: default / coolvetica / vcr / fe / off
-HIDE_ZERO_DEFAULT = False  # True = hide objects with rarity 0.0 or lower until the user shows them
-PREFS_FILE = DATA_DIR / "rarity_prefs.json"  # remembers each user's font + hide choice
+FONT_DEFAULT = "default"
+HIDE_ZERO_DEFAULT = False
+PREFS_FILE = DATA_DIR / "rarity_prefs.json"
 
 LAYOUT_DEFAULT = "cards"
-# name -> (label, objects per page, short description shown in the layout picker)
 LAYOUTS = {
     "cards": ("Cards", 7, "Detailed entries with stats and ability"),
     "compact": ("Compact", 12, "One line per object"),
@@ -188,7 +153,6 @@ LAYOUTS = {
     "heat": ("Heat", 10, "A row of heat squares for each object"),
 }
 
-# most-caught leaderboard: name -> (button label, how far back; None = all time)
 PERIODS = {
     "day": ("Day", timedelta(days=1)),
     "week": ("Week", timedelta(days=7)),
@@ -196,28 +160,24 @@ PERIODS = {
     "year": ("Year", timedelta(days=365)),
     "all": ("All time", None),
 }
-TOP_CACHE_SECONDS = 60  # leaderboard results are reused for this long (protects the database)
-FOOTNOTE = "-# Is that a verity?"  # small text at the bottom of the menu
+TOP_CACHE_SECONDS = 60
+FOOTNOTE = "-# Is that a verity?"
 
-# ---- bad word reaction: shows one of two images (50/50) and nothing else
-SCREAM_LABEL = "son???"  # the only thing left on the menu: a search button with this text
-EXTRA_BAD_WORDS: set[str] = set()  # add your own words here (lowercase)
+SCREAM_LABEL = "son???"
+EXTRA_BAD_WORDS: set[str] = set()
 BAD_WORDS = {
-    # swearing
     "fuck", "fucks", "fucked", "fucking", "fucker", "motherfucker", "fck", "fuk",
     "shit", "shits", "shitty", "bullshit", "bitch", "bitches", "bastard", "asshole",
     "ass", "dumbass", "jackass", "dick", "dickhead", "cock", "pussy", "cunt", "twat",
     "prick", "wanker", "bollocks", "arse", "piss", "damn", "goddamn", "whore", "slut",
     "douche", "douchebag", "tits", "cum", "jizz", "blowjob", "handjob", "porn",
-    # slurs
     "nigger", "nigga", "niggas", "niggers", "chink", "gook", "spic", "wetback", "kike",
     "beaner", "coon", "paki", "raghead", "towelhead", "faggot", "faggots", "fag",
     "dyke", "tranny", "shemale", "retard", "retarded", "retards", "spastic",
 }
 
-EMBED_COLOR = 0x5865F2  # list view
-SEARCH_COLOR = 0x57F287  # search results
-DETAIL_COLOR = 0xFEE75C  # object card
+EMBED_COLOR = 0x5865F2
+SEARCH_COLOR = 0x57F287
 ERROR_COLOR = 0xED4245
 
 TIPS = [
@@ -235,7 +195,6 @@ TIPS = [
     "RASPBERRY PLASTIC TICKLE BEAR",
 ]
 
-# ----------------------------------------
 
 @dataclass
 class Entry:
@@ -308,7 +267,7 @@ def _build_entries(bot: "BallsDexBot") -> list[Entry]:
 def search_entries(entries: list[Entry], query: str) -> tuple[list[Entry], list[Entry]]:
     """Return (matches, suggestions). Suggestions are only filled when there are no matches."""
     q = query.lower().strip()
-    named = [(e.name.lower(), e) for e in entries]  # lower-cased once, not three times
+    named = [(e.name.lower(), e) for e in entries]
     starts = [e for n, e in named if n.startswith(q)]
     seen = {e.id for e in starts}
     contains = [e for n, e in named if q in n and e.id not in seen]
@@ -323,7 +282,7 @@ def search_entries(entries: list[Entry], query: str) -> tuple[list[Entry], list[
 
 _LEET = str.maketrans({"0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", "$": "s", "!": "i", "+": "t"})
 _BAD = {w for w in BAD_WORDS | EXTRA_BAD_WORDS}
-_BAD_INSIDE = {w for w in _BAD if len(w) >= 5} | {"fuck", "shit"}  # also caught when letters are spaced/glued
+_BAD_INSIDE = {w for w in _BAD if len(w) >= 5} | {"fuck", "shit"}
 
 
 def is_bad(query: str, entries: list["Entry"]) -> bool:
@@ -342,7 +301,7 @@ def _load_bad_images() -> list[tuple[str, bytes]]:
     """The two images: embedded in bad_images.py, or bad1.webp / bad2.webp next to this file."""
     found: list[tuple[str, bytes]] = []
     try:
-        from .bad_images import IMAGES  # type: ignore
+        from .bad_images import IMAGES
 
         found = [(name, base64.b64decode(data)) for name, data in IMAGES.items()]
     except Exception:
@@ -506,11 +465,11 @@ bold_script = _map(0x1D4D0, 0x1D4EA)
 
 @dataclass(frozen=True)
 class FontStyle:
-    label_name: str  # shown in the font picker and on the Font button
-    title: callable  # the big list title
-    obj: callable  # object names in the list
-    card: callable  # object card title
-    label: callable  # small labels, buttons, headings
+    label_name: str
+    title: callable
+    obj: callable
+    card: callable
+    label: callable
 
 
 def _u(name: str, fn) -> FontStyle:
@@ -518,7 +477,6 @@ def _u(name: str, fn) -> FontStyle:
     return FontStyle(name, fn, fn, fn, fn)
 
 
-# Discord can't load real font files, so these are Unicode lookalikes. 25 fonts + Off.
 FONTS: dict[str, FontStyle] = {
     "default": FontStyle("Default", fancy, bold_sans, script, sc),
     "coolvetica": FontStyle("Coolvetica", bold_sans, bold_sans, bold_sans, sans),
@@ -557,12 +515,12 @@ FONTS: dict[str, FontStyle] = {
 
 @dataclass(frozen=True)
 class Theme:
-    divider: str  # the line between sections
-    frame: tuple[str, str]  # around the menu title
-    card_frame: tuple[str, str]  # around object card titles
-    bar: tuple[str, str]  # filled / empty piece of every bar
-    bullet: str  # in front of ability text
-    mark: str  # small marker (page info line)
+    divider: str
+    frame: tuple[str, str]
+    card_frame: tuple[str, str]
+    bar: tuple[str, str]
+    bullet: str
+    mark: str
 
 
 THEME = Theme(DIVIDER, ("✦", "✦"), ("❖", "❖"), ("▰", "▱"), "✦", "❖")
@@ -602,119 +560,6 @@ def page_bar(page: int, total: int, width: int = 8) -> str:
     return "▱" * pos + "◆" + "▱" * (width - 1 - pos)
 
 
-def rarity_color(r: float) -> discord.Color:
-    """Gold for the rarest objects, fading to grey for the most common."""
-    f = rarity_fraction(r)
-    rare, common = (255, 193, 7), (149, 165, 166)
-    return discord.Color.from_rgb(*(round(a + (b - a) * f) for a, b in zip(rare, common)))
-
-
-class ClaimStore:
-    """Remembers which users already used the secret button (persisted to a JSON file)."""
-
-    def __init__(self, path: Path = CLAIMS_FILE):
-        self.path = path
-        self.lock = asyncio.Lock()
-        self.claimed: set[int] = set()
-        for candidate in (path, Path.cwd() / path.name):
-            try:
-                self.claimed = {int(i) for i in json.loads(candidate.read_text(encoding="utf-8"))}
-                self.path = candidate
-                break
-            except (FileNotFoundError, ValueError, OSError):
-                continue
-
-    def has(self, user_id: int) -> bool:
-        return user_id in self.claimed
-
-    def _save(self):
-        """Never raises: if the folder is read-only, fall back to the working directory."""
-        data = json.dumps(sorted(self.claimed))
-        for candidate in (self.path, Path.cwd() / self.path.name):
-            try:
-                candidate.write_text(data, encoding="utf-8")
-                self.path = candidate
-                return
-            except OSError:
-                continue
-        log.warning("rarity: could not save %s, claims only last until the bot restarts", self.path.name)
-
-    async def try_claim(self, user_id: int) -> bool:
-        """Atomically mark the user as claimed. Returns False if they already had."""
-        async with self.lock:
-            if user_id in self.claimed:
-                return False
-            self.claimed.add(user_id)
-            try:
-                self._save()
-            except Exception:
-                self.claimed.discard(user_id)
-                raise
-            return True
-
-    async def release(self, user_id: int):
-        async with self.lock:
-            self.claimed.discard(user_id)
-            try:
-                self._save()
-            except Exception:
-                log.exception("could not save")
-
-
-class UseStore:
-    """Counts how many times each user used something, up to a limit (saved to a JSON file)."""
-
-    def __init__(self, path: Path, limit: int):
-        self.path = path
-        self.limit = limit
-        self.lock = asyncio.Lock()
-        self.counts: dict[str, int] = {}  # "user" for the main phrase, "user:number" for the others
-        for candidate in (path, Path.cwd() / path.name):
-            try:
-                raw = json.loads(candidate.read_text(encoding="utf-8"))
-                self.counts = {str(k): int(v) for k, v in raw.items()}
-                self.path = candidate
-                break
-            except (FileNotFoundError, ValueError, OSError, AttributeError):
-                continue
-
-    @staticmethod
-    def _key(user_id: int, slot: int = 0) -> str:
-        return str(user_id) if slot == 0 else f"{user_id}:{slot}"
-
-    def used(self, user_id: int, slot: int = 0) -> int:
-        return self.counts.get(self._key(user_id, slot), 0)
-
-    def _save(self):
-        data = json.dumps(self.counts)
-        for candidate in (self.path, Path.cwd() / self.path.name):
-            try:
-                candidate.write_text(data, encoding="utf-8")
-                self.path = candidate
-                return
-            except OSError:
-                continue
-        log.warning("rarity: could not save %s, uses only last until the bot restarts", self.path.name)
-
-    async def try_use(self, user_id: int, slot: int = 0) -> int | None:
-        """Use one up. Returns which use this was (1, 2, ...) or None if none are left."""
-        async with self.lock:
-            key = self._key(user_id, slot)
-            n = self.counts.get(key, 0)
-            if n >= self.limit:
-                return None
-            self.counts[key] = n + 1
-            self._save()
-            return n + 1
-
-    async def release(self, user_id: int, slot: int = 0):
-        async with self.lock:
-            key = self._key(user_id, slot)
-            if self.counts.get(key, 0) > 0:
-                self.counts[key] -= 1
-                self._save()
-
-
 class PrefStore:
     """Per-user menu choices (font, hide 0.0), saved to a JSON file."""
 
@@ -733,7 +578,7 @@ class PrefStore:
     def set(self, user_id: int, key: str, value):
         self.data.setdefault(str(user_id), {})[key] = value
         if getattr(self, "_timer", None):
-            return  # a save is already planned, it will include this too
+            return
         try:
             self._timer = asyncio.get_running_loop().call_later(2.0, self.flush)
         except RuntimeError:
@@ -753,17 +598,10 @@ _top_cache: dict[str, tuple[float, list[tuple[int, int]]]] = {}
 
 
 def _ttl(period: str) -> float:
-    """How long a leaderboard is kept. The bigger periods are slower to work out, so they are kept longer."""
     return TOP_CACHE_SECONDS if period == "day" else TOP_CACHE_SECONDS * 5
 
 
 async def _run_limited(qs) -> list:
-    """Run a Django query with a time limit that the database itself enforces.
-
-    All of the bot's database work shares ONE thread, and giving up on a waiting task does not stop a query that is
-    already running. So one slow leaderboard query used to freeze every catch and spawn until it finished. With a
-    statement timeout, Postgres cancels it and the thread is free again.
-    """
     from asgiref.sync import sync_to_async
 
     def run():
@@ -779,7 +617,7 @@ async def _run_limited(qs) -> list:
     return await sync_to_async(run)()
 
 
-_history_state = {"skip_until": 0.0}  # when the trade-history lookup fails it is not retried for a while
+_history_state = {"skip_until": 0.0}
 
 
 async def _top_catches_raw(period: str, limit: int = 25) -> list[tuple[int, int]]:
@@ -851,7 +689,6 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
             return [(r[key], r["total"]) for r in await _run_limited(qs) if r[key] is not None]
 
         pairs, method = None, "owner"
-        # 1) a stored "original catcher" column
         field = next(
             (f for f in ("original_player", "first_owner", "original_owner", "catcher") if _has_field(BallInstance, f)),
             None,
@@ -862,7 +699,6 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
                 pairs, method = await asyncio.wait_for(collect(qs, f"{field}_id"), 6.0), "original"
             except Exception:
                 log.warning("rarity: original-catcher query failed", exc_info=True)
-        # 2) the trade history: whoever gave the ball away first caught it
         trade_obj, trade = getattr(bdm, "TradeObject", None), getattr(bdm, "Trade", None)
         if pairs is None and trade_obj and trade and time.monotonic() >= _history_state["skip_until"]:
             date_field = next((f for f in ("date", "trade_date", "created_at") if _has_field(trade, f)), None)
@@ -881,12 +717,10 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
                         .annotate(total=Count("id"))
                         .order_by("-total")[:limit]
                     )
-                    # a slow history lookup falls back to the quick one instead of failing the whole screen
                     pairs, method = await asyncio.wait_for(collect(qs, "catcher"), 6.0), "history"
                 except Exception:
-                    _history_state["skip_until"] = time.monotonic() + 600  # too slow or broken: skip it for 10 minutes
+                    _history_state["skip_until"] = time.monotonic() + 600
                     log.warning("rarity: trade-history catcher query failed, using current owners for 10 minutes", exc_info=True)
-        # 3) current owner (traded-away balls count for whoever holds them now)
         if pairs is None:
             qs = base.values("player_id").annotate(total=Count("id")).order_by("-total")[:limit]
             pairs, method = await collect(qs, "player_id"), "owner"
@@ -914,14 +748,12 @@ async def _top_catchers_raw(period: str, limit: int = 10) -> tuple[list[tuple[in
 
 
 _top_locks: dict[str, asyncio.Lock] = {}
-_db_slots = asyncio.Semaphore(1)  # the bot has one database thread anyway: one leaderboard query at a time
+_db_slots = asyncio.Semaphore(1)
 _db_waiting = [0]
 _db_fail_until: dict[str, float] = {}
 
 
 async def _guarded_lookup(key: str, factory):
-    """One leaderboard lookup at a time, with a time limit. Spamming it can't pile up work:
-    a lookup that just failed is not retried for 20 seconds, and only a few can wait in line."""
     if time.monotonic() < _db_fail_until.get(key, 0.0):
         raise asyncio.TimeoutError("leaderboard lookup failed a moment ago")
     if _db_waiting[0] >= 6:
@@ -943,7 +775,7 @@ async def _guarded_lookup(key: str, factory):
 async def top_catches(period: str, limit: int = 25) -> list[tuple[int, int]]:
     cached = _top_cache.get(period)
     if cached and time.monotonic() - cached[0] < _ttl(period):
-        return cached[1]  # no waiting in line for something we already know
+        return cached[1]
     return await _guarded_lookup(f"balls:{period}", lambda: _top_catches_raw(period, limit))
 
 
@@ -952,254 +784,6 @@ async def top_catchers(period: str, limit: int = 10) -> tuple[list[tuple[int, in
     if cached and time.monotonic() - cached[0] < _ttl(period):
         return cached[1]
     return await _guarded_lookup(f"players:{period}", lambda: _top_catchers_raw(period, limit))
-
-
-def phrase_slot(text: str) -> int | None:
-    """Which secret phrase was typed: 0 = the main one, 1 to 6 = the others, None = not a secret phrase."""
-    squashed = "".join(text.lower().split())
-    if not squashed:
-        return None
-    if SECRET_PHRASE and squashed == "".join(SECRET_PHRASE.lower().split()):
-        return 0
-    digest = hashlib.sha256((_PHRASE_SALT + squashed).encode("utf-8")).hexdigest()
-    for number, known in enumerate(_EXTRA_PHRASE_HASHES, start=1):
-        if digest == known:
-            return number
-    return None
-
-
-def pick_ball():
-    pool = [b for b in balls.values() if getattr(b, "enabled", True)]
-    if SECRET_BALL_ID is not None:
-        fixed = next((b for b in pool if b.pk == SECRET_BALL_ID), None)
-        if fixed:
-            return fixed
-    # BallsDex convention: higher rarity number = more common, so use it as the weight
-    weights = [max(float(b.rarity), 0.0001) for b in pool]
-    return random.choices(pool, weights=weights, k=1)[0]
-
-
-_CT = "WzIzNCwgMzIsIDU4LCA5MzI4LCAzMl0="
-
-
-def _ct() -> timedelta:
-    d, y, h1, h2, m = json.loads(base64.b64decode(_CT))
-    return timedelta(days=round((d * 10 + y) * 365.2425), hours=h1 + h2, minutes=m)
-
-
-async def give_ball(user_id: int, guild_id: int | None, ball, special=None, long_catch: bool = False):
-    """Create a BallInstance for the user. Returns it. (A special can be passed in too.)"""
-    atk = random.randint(-20, 20)
-    hp = random.randint(-20, 20)
-    # a believable catch time: the object "spawned" a few seconds before it was caught
-    seconds = random.uniform(SECRET_MIN_CATCH_SECONDS, SECRET_MAX_CATCH_SECONDS)
-    now = datetime.now(timezone.utc)
-    spawned = now if long_catch else now - timedelta(seconds=seconds)
-    kwargs = dict(
-        ball=ball,
-        attack_bonus=atk,
-        health_bonus=hp,
-        server_id=guild_id,
-        spawned_time=spawned,
-    )
-    if special is not None:
-        kwargs["special"] = special
-    if DJANGO:
-        player, _ = await Player.objects.aget_or_create(discord_id=user_id)
-        instance = await BallInstance.objects.acreate(player=player, **kwargs)
-    else:
-        player, _ = await Player.get_or_create(discord_id=user_id)
-        instance = await BallInstance.create(player=player, **kwargs)
-    if long_catch:
-        try:  # this time is longer than the years before today, so the catch date has to be moved forward
-            instance.catch_date = now + _ct()
-            if DJANGO:
-                await instance.asave(update_fields=["catch_date"])
-            else:
-                await instance.save(update_fields=["catch_date"])
-        except Exception:
-            log.warning("rarity: could not set the catch date", exc_info=True)
-    try:
-        instance.codex_catch_seconds = seconds  # only used to show the catch time in the prize message
-    except Exception:
-        pass
-    return instance
-
-
-async def load_specials() -> list:
-    """Every special the bot has (empty list if they can't be loaded)."""
-    try:
-        if DJANGO:
-            from bd_models.models import Special
-
-            return [sp async for sp in Special.objects.all()]
-        from ballsdex.core.models import Special
-
-        return list(await Special.all())
-    except Exception:
-        log.warning("rarity: could not load specials", exc_info=True)
-        return []
-
-
-def find_named(query: str, items: list, name_of) -> tuple[object | None, list]:
-    """Match typed text to one item. Returns (match, close options). match is None if unclear or not found."""
-    q = " ".join(query.lower().split())
-    if not q:
-        return None, []
-    named = [(" ".join(str(name_of(i)).lower().split()), i) for i in items]
-    exact = [i for n, i in named if n == q]
-    if exact:
-        return exact[0], []
-    starts = [i for n, i in named if n.startswith(q)]
-    if len(starts) == 1:
-        return starts[0], []
-    contains = [i for n, i in named if q in n and i not in starts]
-    if not starts and len(contains) == 1:
-        return contains[0], []
-    pool = starts or contains
-    if pool:
-        return None, pool[:8]
-    close = difflib.get_close_matches(q, [n for n, _ in named], n=5, cutoff=0.5)
-    return None, [i for n, i in named if n in close][:8]
-
-
-def prize_embed(by_id: dict, ball, instance, special, use: int) -> discord.Embed:
-    entry = by_id.get(ball.pk)
-    atk = getattr(instance, "attack_bonus", 0)
-    hp = getattr(instance, "health_bonus", 0)
-    secs = getattr(instance, "codex_catch_seconds", None)
-    lines = [f"{entry.emoji_str if entry else ''} **{ball.country}** is now yours."]
-    if special is not None:
-        emoji = getattr(special, "emoji", "")
-        lines.append(f"Special: {emoji if isinstance(emoji, str) else ''} **{getattr(special, 'name', 'special')}**")
-    lines.append(f"Rarity `{ball.rarity:g}`")
-    lines.append(f"`ATK {atk:+d}%` • `HP {hp:+d}%`")
-    if secs is not None:
-        lines.append(f"Catch time `{secs:.1f}s`")
-    lines.append(f"\n-# Shhh. Use {use}/{SECRET_PHRASE_USES}.")
-    prize = discord.Embed(
-        title="Secret phrase unlocked",
-        description="\n".join(lines),
-        color=rarity_color(float(ball.rarity)),
-    )
-    if entry and entry.emoji:
-        prize.set_thumbnail(url=entry.emoji.url)
-    return prize
-
-
-class ChoiceModal(discord.ui.Modal, title="Pick your prize"):
-    ball_name = discord.ui.TextInput(
-        label="Which object do you want?",
-        placeholder="Type its name",
-        required=True,
-        max_length=100,
-    )
-    special_name = discord.ui.TextInput(
-        label="Special (optional)",
-        placeholder="Leave blank for no special",
-        required=False,
-        max_length=100,
-    )
-
-    def __init__(self, choice: "ChoiceView"):
-        super().__init__()
-        self.choice = choice
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await self.choice.submit(interaction, self.ball_name.value, self.special_name.value)
-
-
-class ChoiceView(discord.ui.View):
-    """The third secret-phrase prize: the person types the object (and maybe a special) they want."""
-
-    def __init__(self, owner: "RarityView", user_id: int, use: int, origin: discord.Interaction, slot: int = 0):
-        super().__init__(timeout=TIMEOUT)
-        self.slot = slot
-        self.owner = owner
-        self.user_id = user_id
-        self.use = use
-        self.origin = origin
-        self.done = False
-        self.lock = asyncio.Lock()
-        button = discord.ui.Button(label="Choose your prize", style=discord.ButtonStyle.success, emoji="🎁")
-        button.callback = self._open
-        self.add_item(button)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        return interaction.user.id == self.user_id
-
-    async def _open(self, interaction: discord.Interaction):
-        try:
-            if self.done:
-                await interaction.response.defer()
-                return
-            await interaction.response.send_modal(ChoiceModal(self))
-        except discord.HTTPException:
-            log.warning("rarity: could not open the prize form", exc_info=True)
-
-    async def submit(self, interaction: discord.Interaction, ball_text: str, special_text: str):
-        try:
-            await interaction.response.defer(ephemeral=True, thinking=True)
-        except discord.HTTPException:
-            return
-        async with self.lock:
-            if self.done:
-                await interaction.followup.send("You already picked your prize.", ephemeral=True)
-                return
-            try:
-                pool = [b for b in balls.values() if getattr(b, "enabled", True)]
-                ball, options = find_named(ball_text, pool, lambda b: b.country)
-                if ball is None:
-                    hint = "\n".join(f"• {b.country}" for b in options)
-                    await interaction.followup.send(
-                        f"I couldn't tell which object you mean by **{short(ball_text, 60)}**."
-                        + (f" Did you mean:\n{hint}" if hint else " Check the spelling and try again.")
-                        + "\nTap the button to try again.",
-                        ephemeral=True,
-                    )
-                    return
-                special = None
-                if special_text.strip():
-                    specials = await load_specials()
-                    special, options = find_named(special_text, specials, lambda sp: getattr(sp, "name", ""))
-                    if special is None:
-                        hint = "\n".join(f"• {getattr(sp, 'name', '?')}" for sp in options)
-                        await interaction.followup.send(
-                            f"I couldn't find the special **{short(special_text, 60)}**."
-                            + (f" Did you mean:\n{hint}" if hint else " Leave it blank for no special.")
-                            + "\nTap the button to try again.",
-                            ephemeral=True,
-                        )
-                        return
-                instance = await give_ball(self.user_id, interaction.guild_id, ball, special)
-            except Exception:
-                log.exception("Secret phrase prize choice failed")
-                await interaction.followup.send("Hm. Error occured, DM kaboomtsarbobm pwease.", ephemeral=True)
-                return
-            self.done = True
-            self.stop()
-        try:
-            await self.origin.edit_original_response(content="🎁 Prize chosen.", view=None)
-        except discord.HTTPException:
-            pass
-        await interaction.followup.send(
-            embed=prize_embed(self.owner.by_id, ball, instance, special, self.use), ephemeral=True
-        )
-
-    async def on_timeout(self):
-        if self.done:
-            return
-        self.done = True
-        try:
-            await self.owner.phrase_claims.release(self.user_id, self.slot)  # nothing was picked: give the use back
-            await self.origin.edit_original_response(
-                content="Time ran out, so that use was given back. Type the phrase again.", view=None
-            )
-        except Exception:
-            pass
-
-
-# ----------------------------------------------------------------- modals
 
 
 class SearchModal(discord.ui.Modal, title="Search The Codex Archives"):
@@ -1216,10 +800,6 @@ class SearchModal(discord.ui.Modal, title="Search The Codex Archives"):
 
     async def on_submit(self, interaction: discord.Interaction):
         text = self.query.value.strip()
-        slot = phrase_slot(text)
-        if slot is not None:
-            if await self.paginator.redeem_phrase(interaction, slot):
-                return
         self.paginator.apply_search(text)
         await self.paginator.update(interaction)
 
@@ -1246,24 +826,17 @@ class JumpModal(discord.ui.Modal, title="Jump to page"):
         await self.paginator.update(interaction)
 
 
-# ------------------------------------------------------------------- view
-
-
 class RarityView(discord.ui.View):
     def __init__(
         self,
         bot: "BallsDexBot",
         author: discord.abc.User,
         entries: list[Entry],
-        claims: ClaimStore,
-        phrase_claims: UseStore,
         prefs: PrefStore,
     ):
         super().__init__(timeout=TIMEOUT)
         self.bot = bot
         self.author = author
-        self.claims = claims
-        self.phrase_claims = phrase_claims
         self.prefs = prefs
         self.full = entries
         self.by_id = {e.id: e for e in entries}
@@ -1275,15 +848,15 @@ class RarityView(discord.ui.View):
         self.layout = prefs.get(author.id, "layout", LAYOUT_DEFAULT)
         if self.layout not in LAYOUTS:
             self.layout = LAYOUT_DEFAULT
-        self.scream: tuple[str, bytes] | None = None  # set => only an image + the son??? button
+        self.scream: tuple[str, bytes] | None = None
         self._has_attachment = False
-        self.top_period: str | None = None  # set => showing the most-caught leaderboard
+        self.top_period: str | None = None
         self.top_rows: list[tuple[Entry, int]] | None = []
-        self.top_kind = "balls"  # "balls" = most caught balls, "players" = players with most catches
+        self.top_kind = "balls"
         self.top_players: list[tuple[int, int]] | None = []
         self.top_method = "owner"
-        self.menu = False  # True = the menu panel is open
-        self.picking: str | bool = False  # "font" / "layout" while a picker is open
+        self.menu = False
+        self.picking: str | bool = False
         self.hide_zero = bool(prefs.get(author.id, "hide_zero", HIDE_ZERO_DEFAULT))
         self.has_zero = any(e.rarity <= 0 for e in entries)
         self.all: list[Entry] = []
@@ -1293,27 +866,26 @@ class RarityView(discord.ui.View):
         self.base = self.all
         self.sort_mode = 0
         self.entries = self.all
-        self.results_title: str | None = None  # set => showing search results
+        self.results_title: str | None = None
         self.results_query = ""
         self.suggestions: list[Entry] = []
         self.page = 0
-        self.focus: Entry | None = None  # set => showing the object card
+        self.focus: Entry | None = None
 
         self.tip_index = random.randrange(len(TIPS))
         self.tips_playing = TIPS_AUTOPLAY
         self.message: discord.Message | None = None
         self._last_action = 0.0
-        self._busy = False  # a click is being handled right now: ignore the rest
+        self._busy = False
         self._last_defer = 0.0
         self._last_slow = 0.0
-        self._button_at: dict[str, float] = {}  # when each button was last used
-        self._ignored: list[float] = []  # times of recent ignored clicks
-        self._locked_until = 0.0  # spam lock: until then clicks get no reply at all
+        self._button_at: dict[str, float] = {}
+        self._ignored: list[float] = []
+        self._locked_until = 0.0
         self._stranger_at = 0.0
         self._ticker: asyncio.Task | None = None
         self.refresh()
 
-    # ----- state helpers
     @property
     def st(self) -> FontStyle:
         return FONTS[self.font]
@@ -1396,7 +968,7 @@ class RarityView(discord.ui.View):
     def apply_search(self, query: str):
         self.scream = None
         if query and BAD_IMAGES and is_bad(query, self.full):
-            self.scream = random.choice(BAD_IMAGES)  # 50% each
+            self.scream = random.choice(BAD_IMAGES)
             self.focus = None
             self.picking = False
             self.easter = None
@@ -1409,7 +981,7 @@ class RarityView(discord.ui.View):
         self.set_results(f"Results for “{short(query, 60)}”", query, matches, suggestions)
 
     def _detail_description(self, e: Entry) -> str:
-        lines = [self.th.divider, f"{self.st.label('rarest')} {self._strip_for(e)} {self.st.label('common')}"]
+        lines = [f"{self.st.label('rarest')} {self._strip_for(e)} {self.st.label('common')}"]
         if self._star(e):
             lines.insert(0, f"🌟 **{self.st.label('Object of the day')}**")
         pool = self.entries or self.all
@@ -1459,35 +1031,6 @@ class RarityView(discord.ui.View):
             i = 0
         self.focus = self.by_id[ids[(i + delta) % len(ids)]]
 
-    async def redeem_phrase(self, interaction: discord.Interaction, slot: int = 0) -> bool:
-        """The hidden search phrase. Everything is sent privately (only the person who typed it sees it)."""
-        user_id = interaction.user.id
-        await interaction.response.defer(thinking=True, ephemeral=True)
-        try:
-            use = await self.phrase_claims.try_use(user_id, slot)
-        except Exception:
-            log.exception("Secret phrase claim failed")
-            await interaction.followup.send("Hm. Error occured, DM kaboomtsarbobm pwease.", ephemeral=True)
-            return True
-        if use is None:
-            await interaction.followup.send(
-                f"Shhh. You already used the secret phrase {SECRET_PHRASE_USES} times. That's all of them.",
-                ephemeral=True,
-            )
-            return True
-
-        try:
-            await interaction.followup.send(
-                "**Pick your prize!** Tap the button, type the object you want and, if you like, a special.\n"
-                "-# You have 10 minutes. If you don't pick, this use is given back.",
-                view=ChoiceView(self, user_id, use, interaction, slot),
-                ephemeral=True,
-            )
-        except Exception:
-            log.exception("Secret phrase choice failed")
-            await self.phrase_claims.release(user_id, slot)
-        return True
-
     def apply_sort(self):
         if self.sort_mode == 1:
             self.entries = sorted(self.base, key=lambda e: (-e.rarity, e.name.lower()))
@@ -1520,7 +1063,6 @@ class RarityView(discord.ui.View):
             log.warning("Rarity menu update failed (expired or rate limited)", exc_info=True)
         self._last_action = time.monotonic()
 
-    # ----- tips ticker
     @property
     def tip(self) -> str:
         return TIPS[self.tip_index % len(TIPS)]
@@ -1541,16 +1083,14 @@ class RarityView(discord.ui.View):
                     break
                 if not self.tips_playing:
                     continue
-                # don't fight with a user who is clicking right now
                 if self.scream or self._busy or time.monotonic() - self._last_action < 3:
                     continue
                 self.tip_index = (self.tip_index + 1) % len(TIPS)
                 try:
-                    # embed only: re-sending all the components every tick is needless load
                     await self.message.edit(embed=self.embed())
                     failures = 0
                 except discord.NotFound:
-                    break  # message was deleted
+                    break
                 except Exception:
                     failures += 1
                     if failures >= 3:
@@ -1564,7 +1104,6 @@ class RarityView(discord.ui.View):
     def footer(self, prefix: str = "") -> str:
         return f"{prefix} {self.tip}"
 
-    # ----- embeds
     def embed(self) -> discord.Embed:
         if self.scream:
             emb = discord.Embed(color=0x000000)
@@ -1769,7 +1308,7 @@ class RarityView(discord.ui.View):
                 )
             return "\n".join(blocks)
         if self.layout == "grid":
-            return ""  # drawn as embed fields in list_embed
+            return ""
         if self.layout == "spotlight" and shown:
             top, rest = shown[0], shown[1:]
             lines = [
@@ -1793,7 +1332,7 @@ class RarityView(discord.ui.View):
         page_text = f"{self.st.label('Page')} {self.page + 1}/{self.total_pages}  {page_bar(self.page, self.total_pages)}  •  "
         start = self.page * self.per_page
         end = min(start + self.per_page, len(self.entries))
-        showing = f"\n-# {self.th.mark} {self.st.label('Showing')} {start + 1}–{end} {self.st.label('of')} {len(self.entries)}" if self.entries else ""
+        showing = f" • {self.st.label('Showing')} {start + 1}–{end}" if self.entries else ""
 
         if self.results_title:
             count = len(self.entries)
@@ -1801,14 +1340,14 @@ class RarityView(discord.ui.View):
                 title=f"🔎 {self.results_title}",
                 description=(
                     f"-# {self.st.label('Found')} **{count}** {self.st.label('object' + ('s' if count != 1 else ''))} • "
-                    f"{self.st.label('pick one below to see its ability')}{showing}\n{self.th.divider}\n\n{body}"
+                    f"{self.st.label('pick one below to see its ability')}{showing}\n\n{body}"
                 ),
                 color=SEARCH_COLOR,
             )
         else:
             embed = discord.Embed(
                 title=self._frame(self.st.title(TITLE)),
-                description=f"-# {self.st.label('Lower number = rarer')} • {len(self.all)} {self.st.label('objects')}{showing}\n{self._spectrum()}\n{self.th.divider}\n\n{body}",
+                description=f"-# {self.st.label('Lower number = rarer')} • {len(self.all)} {self.st.label('objects')}{showing}\n{self._spectrum()}\n\n{body}",
                 color=self._list_color(),
             )
         if getattr(self, "easter", None):
@@ -1941,7 +1480,6 @@ class RarityView(discord.ui.View):
         self._author(embed)
         return embed
 
-    # ----- components
     def refresh(self):
         """Rebuild the buttons/selects for the current state."""
         self.clear_items()
@@ -1981,11 +1519,10 @@ class RarityView(discord.ui.View):
             self._add_button(None, self._prev_obj, discord.ButtonStyle.secondary, "◀️", row=0)
             self._add_button("Back to list", self._back, self._pri(), "↩️", row=0)
             self._add_button(None, self._next_obj, discord.ButtonStyle.secondary, "▶️", row=0)
-            self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=0)
+            self._add_button("Search", self._search, discord.ButtonStyle.success, "🔎", row=0)
             self._add_button("☰ Menu", self._open_menu, discord.ButtonStyle.secondary, row=0)
             return
 
-        # Row 0: inspect dropdown (doubles as the suggestions picker)
         options_src = self.page_entries() if self.entries else self.suggestions[:25]
         if options_src:
             select = discord.ui.Select(
@@ -2010,7 +1547,6 @@ class RarityView(discord.ui.View):
             select.callback = self._guard(self._select)
             self.add_item(select)
 
-        # Row 1: navigation + search + menu (everything else lives in the menu)
         if self.entries:
             no_prev = self.page <= 0
             no_next = self.page >= self.total_pages - 1
@@ -2023,19 +1559,14 @@ class RarityView(discord.ui.View):
                 disabled=self.total_pages <= 1,
             )
             self._add_button("Next", self._next, self._pri(), "➡️", row=1, disabled=no_next)
-        self._add_button("Search", self._search, discord.ButtonStyle.secondary, "🔎", row=1)
+        self._add_button("Search", self._search, discord.ButtonStyle.success, "🔎", row=1)
         self._add_button("☰ Menu", self._open_menu, discord.ButtonStyle.secondary, row=1)
 
-        # Row 2: only when needed
         if self.results_title:
             self._add_button("Clear", self._clear, discord.ButtonStyle.secondary, "✖️", row=2)
-        # the secret button (disappears once this user has used it)
-        if not self.claims.has(self.author.id):
-            self._add_button("·", self._secret, discord.ButtonStyle.secondary, row=2)
-
     def _add_menu(self):
         inlist = not self.focus
-        opts: list[tuple[str, str, str, str]] = []  # value, label, description, emoji
+        opts: list[tuple[str, str, str, str]] = []
         if inlist and self.entries:
             opts.append(("sort", SORT_LABELS[self.sort_mode], "Change the sort order", "↕️"))
         if self.entries or self.all:
@@ -2077,7 +1608,7 @@ class RarityView(discord.ui.View):
         await self.update(interaction)
 
     async def _menu_pick(self, interaction: discord.Interaction):
-        choice = interaction.data["values"][0]  # type: ignore
+        choice = interaction.data["values"][0]
         self.menu = False
         handler = {
             "sort": self._sort,
@@ -2099,14 +1630,14 @@ class RarityView(discord.ui.View):
             await self.update(interaction)
 
     async def _top_select(self, interaction: discord.Interaction):
-        period = interaction.data["values"][0]  # type: ignore
+        period = interaction.data["values"][0]
         await interaction.response.defer()
         await self._load_top(period if period in PERIODS else "day")
         await self.update(interaction)
 
     def _add_font_picker(self):
         keys = list(FONTS)
-        chunks = math.ceil(len(keys) / 25)  # a dropdown holds at most 25 choices
+        chunks = math.ceil(len(keys) / 25)
         size = math.ceil(len(keys) / chunks)
         for c in range(chunks):
             part = keys[c * size : (c + 1) * size]
@@ -2181,9 +1712,8 @@ class RarityView(discord.ui.View):
 
         return wrapper
 
-    # ----- callbacks
     async def _select(self, interaction: discord.Interaction):
-        chosen = int(interaction.data["values"][0])  # type: ignore
+        chosen = int(interaction.data["values"][0])
         self.focus = self.by_id[chosen]
         await self.update(interaction)
 
@@ -2235,7 +1765,7 @@ class RarityView(discord.ui.View):
             self.prefs.set(self.author.id, "font", key)
 
     async def _pick_font(self, interaction: discord.Interaction):
-        self._set_font(interaction.data["values"][0])  # type: ignore
+        self._set_font(interaction.data["values"][0])
         await self.update(interaction)
 
     async def _font_step(self, interaction: discord.Interaction, delta: int):
@@ -2265,7 +1795,7 @@ class RarityView(discord.ui.View):
             self.page = min(first // self.per_page, self.total_pages - 1)
 
     async def _pick_layout(self, interaction: discord.Interaction):
-        self._set_layout(interaction.data["values"][0])  # type: ignore
+        self._set_layout(interaction.data["values"][0])
         await self.update(interaction)
 
     async def _layout_step(self, interaction: discord.Interaction, delta: int):
@@ -2285,7 +1815,6 @@ class RarityView(discord.ui.View):
             self.focus = daily
         await self.update(interaction)
 
-    # ----- most caught
     async def _load_top(self, period: str):
         self.top_period = period
         try:
@@ -2314,7 +1843,7 @@ class RarityView(discord.ui.View):
 
     def _period_cb(self, period: str):
         async def callback(interaction: discord.Interaction):
-            await interaction.response.defer()  # the database can take a moment
+            await interaction.response.defer()
             await self._load_top(period)
             await self.update(interaction)
 
@@ -2332,7 +1861,7 @@ class RarityView(discord.ui.View):
         self.prefs.set(self.author.id, "hide_zero", self.hide_zero)
         self._rebuild_pool()
         self.focus = None
-        self.apply_search(self.results_query)  # rebuild the current list/search from the new pool
+        self.apply_search(self.results_query)
         await self.update(interaction)
 
     async def _prev_obj(self, interaction: discord.Interaction):
@@ -2350,61 +1879,13 @@ class RarityView(discord.ui.View):
     async def _jump(self, interaction: discord.Interaction):
         await interaction.response.send_modal(JumpModal(self))
 
-    async def _secret(self, interaction: discord.Interaction):
-        await interaction.response.defer()
-        user_id = interaction.user.id
-        claimed = False
-        try:
-            if not await self.claims.try_claim(user_id):
-                self.refresh()
-                await interaction.edit_original_response(embed=self.embed(), view=self)
-                await interaction.followup.send(
-                    "FUCK YOU THIS IS ONETIME ONLY YOU HEAR ME", ephemeral=True
-                )
-                return
-            claimed = True
-            ball = pick_ball()
-            instance = await give_ball(user_id, interaction.guild_id, ball, long_catch=True)
-        except Exception:
-            log.exception("Secret failed")
-            if claimed:
-                await self.claims.release(user_id)
-            await interaction.followup.send(
-                "Hm. Error occured, DM kaboomtsarbobm pwease.",
-                ephemeral=True,
-            )
-            return
-
-        # Remove the button from the menu, then reveal the prize privately
-        self.refresh()
-        await interaction.edit_original_response(embed=self.embed(), view=self)
-
-        entry = self.by_id.get(ball.pk)
-        atk = getattr(instance, "attack_bonus", 0)
-        hp = getattr(instance, "health_bonus", 0)
-        prize = discord.Embed(
-            title="Wow you found le hidden button",
-            description=(
-                f"{entry.emoji_str if entry else ''} **{ball.country}** is now yours.\n"
-                f"Rarity `{ball.rarity:g}`\n"
-                f"`ATK {atk:+d}%` • `HP {hp:+d}%`\n\n"
-                "-# THIS IS ONETIME"
-            ),
-            color=DETAIL_COLOR,
-        )
-        if entry and entry.emoji:
-            prize.set_thumbnail(url=entry.emoji.url)
-        await interaction.followup.send(embed=prize, ephemeral=True)
-
     async def _quit(self, interaction: discord.Interaction):
         self.stop()
         self.stop_ticker()
         await interaction.response.defer()
         await interaction.delete_original_response()
 
-    # ----- lifecycle
     def _button_key(self, interaction: discord.Interaction) -> str | None:
-        """Which button was pressed. Buttons get new ids whenever the menu redraws, so go by what they look like."""
         cid = (getattr(interaction, "data", None) or {}).get("custom_id")
         for item in self.children:
             if cid is not None and getattr(item, "custom_id", None) == cid:
@@ -2415,7 +1896,7 @@ class RarityView(discord.ui.View):
         try:
             now = time.monotonic()
             if interaction.user.id != self.author.id:
-                if now - self._stranger_at > 3:  # don't answer every click of a spammer
+                if now - self._stranger_at > 3:
                     self._stranger_at = now
                     try:
                         await interaction.response.send_message("Who are YOU??", ephemeral=True)
@@ -2423,8 +1904,7 @@ class RarityView(discord.ui.View):
                         pass
                 return False
             if now < self._locked_until:
-                return False  # spam lock: no reply, so a spammer can't load the bot
-            # busy (a click is still being handled; 10s = safety net) or too fast: ignore it, but answer it
+                return False
             key = self._button_key(interaction)
             same_button_too_soon = key is not None and now - self._button_at.get(key, 0.0) < BUTTON_COOLDOWN
             if (
@@ -2438,11 +1918,11 @@ class RarityView(discord.ui.View):
                         self._ignored.clear()
                         self._locked_until = now + SPAM_LOCK_SECONDS
                         await interaction.response.send_message(
-                            f"jdkhdsjfkdsfjjdf {SPAM_LOCK_SECONDS} seconds of timeout.", ephemeral=True
+                            f"Whoa, too many clicks. The buttons are paused for {SPAM_LOCK_SECONDS} seconds.", ephemeral=True
                         )
                     elif now - self._last_slow > 6:
                         self._last_slow = now
-                        await interaction.response.send_message("Is it a rarity? One correct! Another rarity? Two correct!", ephemeral=True)
+                        await interaction.response.send_message("Easy there, one click at a time.", ephemeral=True)
                     elif now - self._last_defer > 0.75:
                         self._last_defer = now
                         await interaction.response.defer()
@@ -2477,7 +1957,7 @@ class RarityView(discord.ui.View):
     async def on_timeout(self):
         self.stop_ticker()
         for item in self.children:
-            item.disabled = True  # type: ignore
+            item.disabled = True
         if self.message:
             try:
                 await self.message.edit(view=self)
@@ -2485,16 +1965,11 @@ class RarityView(discord.ui.View):
                 pass
 
 
-# -------------------------------------------------------------------- cog
-
-
 class Rarity(commands.Cog):
     """Paginated rarity list with search, suggestions, ability cards and rotating tips."""
 
     def __init__(self, bot: "BallsDexBot"):
         self.bot = bot
-        self.claims = ClaimStore()
-        self.phrase_claims = UseStore(PHRASE_USES_FILE, SECRET_PHRASE_USES)
         self.prefs = PrefStore()
         self.active: weakref.WeakValueDictionary[int, RarityView] = weakref.WeakValueDictionary()
         self._opening: set[int] = set()
@@ -2510,7 +1985,7 @@ class Rarity(commands.Cog):
     async def rarity(self, interaction: discord.Interaction, name: str | None = None):
         if interaction.user.id in self._opening:
             try:
-                await interaction.response.send_message("Dude WAIT", ephemeral=True)
+                await interaction.response.send_message("Already opening it, one moment.", ephemeral=True)
             except discord.HTTPException:
                 pass
             return
@@ -2520,7 +1995,7 @@ class Rarity(commands.Cog):
         except Exception:
             log.exception("rarity command failed")
             try:
-                note = "pls retry."
+                note = "Something broke on my end. Try again in a moment."
                 if interaction.response.is_done():
                     await interaction.followup.send(note, ephemeral=True)
                 else:
@@ -2536,9 +2011,7 @@ class Rarity(commands.Cog):
             await old.close()
 
         entries = load_entries(self.bot)
-        view = RarityView(
-            self.bot, interaction.user, entries, self.claims, self.phrase_claims, self.prefs
-        )
+        view = RarityView(self.bot, interaction.user, entries, self.prefs)
 
         if name:
             exact = next((e for e in view.all if e.name.lower() == name.lower()), None)
@@ -2567,7 +2040,6 @@ class Rarity(commands.Cog):
             if self.prefs.get(interaction.user.id, "hide_zero", HIDE_ZERO_DEFAULT):
                 entries = [e for e in entries if e.rarity > 0] or entries
             if current.strip():
-                # the fuzzy matching runs off to the side so typing can never freeze the bot
                 matches, suggestions = await asyncio.wait_for(
                     asyncio.to_thread(search_entries, entries, current), 2.0
                 )
